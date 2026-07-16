@@ -8,15 +8,37 @@
   const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const bd = (n) => '৳' + Number(n || 0).toLocaleString('bn-BD');
   const api = async (path, opts = {}) => {
+    // ...opts আগে, headers পরে — নাহলে opts.headers (যেমন Auth.api-র Authorization)
+    // পুরো headers replace করে Content-Type হারিয়ে ফেলত → সার্ভারে body ভুল পার্স হতো
     const res = await fetch('/api' + path, {
-      headers: { 'Content-Type': 'application/json', ...(opts.headers || {}) },
       ...opts,
+      headers: { 'Content-Type': 'application/json', ...(opts.headers || {}) },
       body: opts.body ? JSON.stringify(opts.body) : undefined,
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(data.error || 'সার্ভারে সমস্যা হয়েছে');
     return data;
   };
+
+  /* মোবাইলে নিচে স্ক্রলে header লুকায়, উপরে উঠলে ফেরে */
+  function initHideOnScroll() {
+    const hdr = document.querySelector('.site-header');
+    if (!hdr) return;
+    let last = window.scrollY, ticking = false;
+    window.addEventListener('scroll', () => {
+      if (ticking) return;
+      ticking = true;
+      requestAnimationFrame(() => {
+        const y = window.scrollY;
+        if (window.innerWidth <= 768) {
+          if (y > last && y > 90) hdr.classList.add('hdr-hide');
+          else if (y < last - 4 || y <= 90) hdr.classList.remove('hdr-hide');
+        } else hdr.classList.remove('hdr-hide');
+        last = y;
+        ticking = false;
+      });
+    }, { passive: true });
+  }
 
   let toastEl;
   const toast = (msg, err = false) => {
@@ -207,10 +229,15 @@
     </a>`;
   }
 
+  const skelCards = (n = 8) => Array.from({ length: n }, () =>
+    '<div class="skel-card"><div class="skel si"></div><div class="skel sl"></div><div class="skel sl short"></div></div>').join('');
+
   /* ================= PAGES ================= */
   const pages = {
     /* ----- home ----- */
     async home() {
+      $('#home-featured').innerHTML = skelCards(8);
+      $('#home-latest').innerHTML = skelCards(8);
       try {
         const cols = await api('/collections');
         $('#home-collections').innerHTML = cols.map((c) => `
@@ -236,7 +263,7 @@
       const state = { page: 1, sort: params.get('sort') || 'newest' };
 
       const load = async () => {
-        $('#col-grid').innerHTML = '<div class="skeleton" style="height:280px"></div>'.repeat(4);
+        $('#col-grid').innerHTML = skelCards(8);
         const qs = new URLSearchParams({ page: state.page, sort: state.sort, limit: 24 });
         if (slugMatch) qs.set('collection', decodeURIComponent(slugMatch[1]));
         if (q) qs.set('q', q);
@@ -772,6 +799,7 @@
       }
     } catch {}
     await renderChrome();
+    initHideOnScroll();
     const page = document.body.dataset.page;
     if (pages[page]) pages[page]();
   });
