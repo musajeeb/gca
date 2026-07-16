@@ -108,8 +108,17 @@ app.use((err, req, res, next) => {
   if (!process.env.SMTP_USER || !process.env.SMTP_APP_PASSWORD) {
     console.warn('⚠️  SMTP_USER/SMTP_APP_PASSWORD সেট নেই — অর্ডারের ইমেইল নোটিফিকেশন যাবে না। .env দেখুন।');
   }
-  await connectDB();
-  await seedAdmin();
+  // আগে listen, পরে DB connect — Hostinger/Passenger-জাতীয় হোস্টের startup timeout
+  // ("app didn't call listen") এড়াতে। DB connect হওয়ার আগ পর্যন্ত mongoose নিজেই
+  // query গুলো buffer করে রাখে, তাই প্রথম কয়েক সেকেন্ডের রিকোয়েস্টও হারায় না।
   const port = process.env.PORT || 3000;
-  app.listen(port, () => console.log(`✅ NetBazar চলছে: http://localhost:${port}  |  Admin: /admin`));
+  app.listen(port, () => console.log(`✅ NetBazar চলছে: port ${port}  |  Admin: /admin`));
+  try {
+    await connectDB();
+    await seedAdmin();
+    console.log('✅ ডাটাবেস connected');
+  } catch (e) {
+    console.error('❌ ডাটাবেস connect ব্যর্থ:', e.message);
+    console.error('   চেক করুন: (১) hPanel-এ MONGODB_URI ঠিক আছে কিনা (২) Atlas → Network Access → 0.0.0.0/0 allow করা কিনা');
+  }
 })();
