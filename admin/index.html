@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="bn">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="robots" content="noindex, nofollow">
+<title>NetBazar Admin</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Anek+Bangla:wght@600;700;800&family=Hind+Siliguri:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/admin/css/admin.css">
+<script src="/admin/js/admin.js" defer></script>
+</head>
+<body>
+
+<!-- ========== LOGIN ========== -->
+<div id="login-view" class="login-wrap" hidden>
+  <form class="login-card" id="login-form">
+    <div class="logo"><span class="led"><i></i><i></i><i></i><i></i></span> NetBazar Admin</div>
+    <label for="l-email">ইমেইল</label>
+    <input id="l-email" type="email" required autocomplete="username">
+    <label for="l-pass">পাসওয়ার্ড</label>
+    <input id="l-pass" type="password" required autocomplete="current-password">
+    <button class="btn btn-primary" type="submit">লগইন</button>
+    <p id="login-err" class="err-text"></p>
+  </form>
+</div>
+
+<!-- ========== APP ========== -->
+<div id="app-view" hidden>
+  <aside class="sidebar">
+    <div class="logo"><span class="led"><i></i><i></i><i></i><i></i></span> NetBazar</div>
+    <nav id="nav">
+      <button data-view="dashboard" class="active">📊 ড্যাশবোর্ড</button>
+      <button data-view="products">📦 প্রোডাক্ট</button>
+      <button data-view="orders">🛒 অর্ডার</button>
+      <button data-view="collections">🗂️ কালেকশন</button>
+      <button data-view="coupons">🏷️ কুপন</button>
+      <button data-view="reviews">⭐ রিভিউ</button>
+      <button data-view="customers">👥 কাস্টমার</button>
+      <button data-view="blog">📝 ব্লগ</button>
+      <button data-view="pages">📄 পেজ</button>
+      <button data-view="payments">💳 পেমেন্ট</button>
+      <button data-view="settings">⚙️ সেটিংস</button>
+    </nav>
+    <button id="logout-btn" class="logout">লগআউট</button>
+  </aside>
+  <main class="main" id="main"></main>
+</div>
+
+<div class="toast" id="toast"></div>
+<div class="modal-backdrop" id="modal" hidden><div class="modal" id="modal-body"></div></div>
+</body>
+</html>

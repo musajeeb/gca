@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="bn">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Anek+Bangla:wght@600;700;800&family=Hind+Siliguri:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/css/main.css">
+<script src="/js/app.js" defer></script>
+<title>অর্ডার ট্র্যাক — NetBazar</title>
+</head>
+<body data-page="track">
+<header class="site-header" id="site-header"></header>
+<main class="container section" style="max-width:560px">
+  <div class="card">
+    <span class="eyebrow">লাইভ স্ট্যাটাস</span>
+    <h1 style="font-family:var(--font-display);margin:6px 0 16px">অর্ডার ট্র্যাক করুন</h1>
+    <form id="track-form" class="form-grid">
+      <div><label for="t-order">অর্ডার নম্বর</label><input id="t-order" required placeholder="NB1001"></div>
+      <div><label for="t-phone">অর্ডারের মোবাইল নম্বর</label><input id="t-phone" required pattern="(\+8801[3-9][0-9]{8}|01[3-9][0-9]{8})" placeholder="01XXXXXXXXX" inputmode="tel"></div>
+      <button class="btn btn-primary" type="submit">খুঁজুন</button>
+    </form>
+  </div>
+  <div id="track-result"></div>
+</main>
+<footer class="site-footer" id="site-footer"></footer>
+</body>
+</html>
