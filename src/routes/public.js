@@ -4,7 +4,8 @@ const mongoose = require('mongoose');
 const { Product, Collection, Order, Coupon, Blog, Page, Review, Customer, Stat, Settings, nextSeq } = require('../models');
 const { validate, checkoutLimiter, trackLimiter, reviewLimiter, beaconLimiter, loginLimiter, PHONE_RE, ADDRESS_RE, normalizePhone, signCustomerToken, requireCustomer, optionalCustomer } = require('../middleware');
 const bcrypt = require('bcryptjs');
-const { notifyNewOrder } = require('../services/mailer');
+const { notifyNewOrder, sendOtpMail } = require('../services/mailer');
+const crypto = require('crypto');
 
 const oid = (s) => mongoose.isValidObjectId(s);
 const zPhone = z.string().trim()
@@ -188,7 +189,7 @@ const checkoutSchema = z.object({
   website: z.string().max(0).optional(), // honeypot — bot হলে ভরবে
 });
 
-router.post('/checkout', checkoutLimiter, optionalCustomer, validate(checkoutSchema), async (req, res, next) => {
+router.post('/checkout', checkoutLimiter, requireCustomer, validate(checkoutSchema), async (req, res, next) => {
   try {
     if (req.body.website) return res.status(400).json({ error: 'Invalid request' });
     const { items, customer, paymentMethod, couponCode } = req.body;
@@ -243,7 +244,7 @@ router.post('/checkout', checkoutLimiter, optionalCustomer, validate(checkoutSch
     const orderNo = `NB${await nextSeq('order')}`;
     const order = new Order({
       orderNo, items: orderItems, customer,
-      customerId: req.customer?.id || null,
+      customerId: req.customer.id,
       subtotal, deliveryFee, discount, couponCode: appliedCoupon,
       total, paymentMethod, advanceDue, codDue,
       status: 'awaiting_payment',
@@ -323,19 +324,75 @@ router.post('/reviews', reviewLimiter, validate(z.object({
   } catch (e) { next(e); }
 });
 
-/* ================= CUSTOMER ACCOUNT (ঐচ্ছিক — guest checkout-ও চলে) ================= */
+/* ================= CUSTOMER ACCOUNT (অর্ডারে অ্যাকাউন্ট বাধ্যতামূলক) ================= */
+const hashOtp = (code) => crypto.createHash('sha256').update(code + process.env.JWT_SECRET).digest('hex');
+const genOtp = () => String(crypto.randomInt(100000, 1000000)); // 6 digit
+
+async function issueOtp(customer) {
+  const code = genOtp();
+  customer.otpHash = hashOtp(code);
+  customer.otpExpires = new Date(Date.now() + 10 * 60 * 1000);
+  customer.otpTries = 0;
+  await customer.save();
+  await sendOtpMail(customer.email, customer.name, code); // ব্যর্থ হলে throw
+}
+
 router.post('/auth/register', loginLimiter, validate(z.object({
   name: z.string().trim().min(2).max(80),
   phone: zPhone,
-  password: z.string().min(6, 'পাসওয়ার্ড কমপক্ষে ৬ ক্যারেক্টার').max(100),
+  email: z.string().trim().email('সঠিক ইমেইল দিন').max(120).toLowerCase(),
+  password: z.string().min(8, 'পাসওয়ার্ড কমপক্ষে ৮ ক্যারেক্টার').max(100),
 })), async (req, res, next) => {
   try {
-    const exists = await Customer.findOne({ phone: req.body.phone });
-    if (exists) return res.status(400).json({ error: 'এই নম্বরে আগেই অ্যাকাউন্ট আছে — লগইন করুন' });
-    const hash = await bcrypt.hash(req.body.password, 12);
-    const c = await Customer.create({ name: req.body.name, phone: req.body.phone, password: hash });
-    res.status(201).json({ token: signCustomerToken(c), name: c.name, phone: c.phone });
+    const { name, phone, email, password } = req.body;
+    if (await Customer.findOne({ phone })) return res.status(400).json({ error: 'এই নম্বরে আগেই অ্যাকাউন্ট আছে — লগইন করুন' });
+    if (await Customer.findOne({ email })) return res.status(400).json({ error: 'এই ইমেইলে আগেই অ্যাকাউন্ট আছে — লগইন করুন' });
+    const hash = await bcrypt.hash(password, 12);
+    const c = await Customer.create({ name, phone, email, password: hash, emailVerified: false });
+    try {
+      await issueOtp(c);
+    } catch (e) {
+      return res.status(502).json({ error: 'ভেরিফিকেশন মেইল পাঠানো যায়নি — কিছুক্ষণ পরে "কোড আবার পাঠান" চাপুন', pendingVerify: true });
+    }
+    res.status(201).json({ pendingVerify: true, email: c.email });
   } catch (e) { next(e); }
+});
+
+router.post('/auth/verify-otp', loginLimiter, validate(z.object({
+  phone: zPhone,
+  otp: z.string().trim().regex(/^\d{6}$/, '৬ ডিজিটের কোড দিন'),
+})), async (req, res, next) => {
+  try {
+    const c = await Customer.findOne({ phone: req.body.phone, active: true }).select('+otpHash +otpExpires +otpTries');
+    if (!c) return res.status(404).json({ error: 'অ্যাকাউন্ট পাওয়া যায়নি' });
+    if (c.emailVerified) return res.json({ token: signCustomerToken(c), name: c.name, phone: c.phone });
+    if (!c.otpHash || !c.otpExpires || c.otpExpires < new Date()) {
+      return res.status(400).json({ error: 'কোডের মেয়াদ শেষ — "কোড আবার পাঠান" চাপুন' });
+    }
+    if (c.otpTries >= 5) return res.status(429).json({ error: 'অনেকবার ভুল হয়েছে — নতুন কোড নিন' });
+    if (hashOtp(req.body.otp) !== c.otpHash) {
+      c.otpTries += 1;
+      await c.save();
+      return res.status(400).json({ error: `কোড ভুল (${5 - c.otpTries} বার বাকি)` });
+    }
+    c.emailVerified = true;
+    c.otpHash = undefined; c.otpExpires = undefined; c.otpTries = 0;
+    await c.save();
+    res.json({ token: signCustomerToken(c), name: c.name, phone: c.phone, address: c.address });
+  } catch (e) { next(e); }
+});
+
+router.post('/auth/resend-otp', loginLimiter, validate(z.object({ phone: zPhone })), async (req, res, next) => {
+  try {
+    const c = await Customer.findOne({ phone: req.body.phone, active: true });
+    if (!c) return res.status(404).json({ error: 'অ্যাকাউন্ট পাওয়া যায়নি' });
+    if (c.emailVerified) return res.status(400).json({ error: 'ইমেইল আগেই ভেরিফায়েড — লগইন করুন' });
+    if (!c.email) return res.status(400).json({ error: 'এই অ্যাকাউন্টে ইমেইল নেই — নতুন করে রেজিস্টার করুন' });
+    await issueOtp(c);
+    res.json({ ok: true, email: c.email });
+  } catch (e) {
+    res.status(502).json({ error: 'মেইল পাঠানো যায়নি — অ্যাডমিনের ইমেইল কনফিগ চেক করা দরকার' });
+  }
 });
 
 router.post('/auth/login', loginLimiter, validate(z.object({
@@ -348,6 +405,9 @@ router.post('/auth/login', loginLimiter, validate(z.object({
     if (!c) return bad();
     const ok = await bcrypt.compare(req.body.password, c.password);
     if (!ok) return bad();
+    if (!c.emailVerified) {
+      return res.status(403).json({ error: 'ইমেইল ভেরিফাই করা হয়নি — কোড দিয়ে ভেরিফাই করুন', needVerify: true, email: c.email || '' });
+    }
     res.json({ token: signCustomerToken(c), name: c.name, phone: c.phone, address: c.address });
   } catch (e) { next(e); }
 });
@@ -356,7 +416,7 @@ router.get('/me', requireCustomer, async (req, res, next) => {
   try {
     const c = await Customer.findById(req.customer.id).lean();
     if (!c || !c.active) return res.status(401).json({ error: 'অ্যাকাউন্ট পাওয়া যায়নি' });
-    res.json({ name: c.name, phone: c.phone, address: c.address });
+    res.json({ name: c.name, phone: c.phone, email: c.email || '', address: c.address });
   } catch (e) { next(e); }
 });
 

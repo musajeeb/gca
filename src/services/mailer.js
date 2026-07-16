@@ -104,6 +104,22 @@ function notifyPaid(o) {
   }
 }
 
+/** রেজিস্ট্রেশন OTP — ব্যর্থ হলে throw করে, যেন user জানে মেইল যায়নি */
+async function sendOtpMail(email, name, code) {
+  const t = getTransporter();
+  if (!t) throw new Error('ইমেইল সিস্টেম কনফিগার করা নেই — কিছুক্ষণ পরে চেষ্টা করুন বা আমাদের সাথে যোগাযোগ করুন');
+  await t.sendMail({
+    from: `"${process.env.SITE_NAME || 'NetBazar'}" <${process.env.SMTP_USER}>`,
+    to: email,
+    subject: `আপনার ভেরিফিকেশন কোড: ${code}`,
+    html: wrap('ইমেইল ভেরিফিকেশন', `
+      <p>প্রিয় ${esc(name)},</p>
+      <p>আপনার অ্যাকাউন্ট চালু করতে এই কোডটা দিন:</p>
+      <p style="font-size:32px;font-weight:bold;letter-spacing:8px;background:#f2f5f9;border-radius:10px;padding:14px;text-align:center">${code}</p>
+      <p style="color:#667;font-size:13px">কোডটা ১০ মিনিট কার্যকর। আপনি রেজিস্টার না করে থাকলে মেইলটা উপেক্ষা করুন।</p>`),
+  });
+}
+
 /** টেস্ট মেইল — কনফিগ ঠিক আছে কিনা admin থেকে যাচাই (এরর হলে আসল কারণ ফেরত দেয়) */
 async function sendTestMail() {
   if (!process.env.SMTP_USER || !process.env.SMTP_APP_PASSWORD) {
@@ -120,4 +136,4 @@ async function sendTestMail() {
   return to;
 }
 
-module.exports = { sendMail, sendTestMail, notifyNewOrder, notifyPaid };
+module.exports = { sendMail, sendTestMail, sendOtpMail, notifyNewOrder, notifyPaid };

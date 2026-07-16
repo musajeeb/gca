@@ -214,6 +214,11 @@ const customerSchema = new Schema(
   {
     phone: { type: String, required: true, unique: true, trim: true }, // normalized 01XXXXXXXXX
     name: { type: String, required: true, trim: true },
+    email: { type: String, required: true, unique: true, trim: true, lowercase: true },
+    emailVerified: { type: Boolean, default: false },
+    otpHash: { type: String, select: false },
+    otpExpires: { type: Date, select: false },
+    otpTries: { type: Number, default: 0, select: false },
     password: { type: String, required: true, select: false },
     address: { type: String, default: '' },
     active: { type: Boolean, default: true },

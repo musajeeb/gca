@@ -16,7 +16,11 @@
       body: opts.body ? JSON.stringify(opts.body) : undefined,
     });
     const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(data.error || 'সার্ভারে সমস্যা হয়েছে');
+    if (!res.ok) {
+      const err = new Error(data.error || 'সার্ভারে সমস্যা হয়েছে');
+      err.data = data;
+      throw err;
+    }
     return data;
   };
 
@@ -513,6 +517,11 @@
 
     /* ----- checkout ----- */
     checkout() {
+      // অর্ডারে অ্যাকাউন্ট বাধ্যতামূলক — লগইন/রেজিস্ট্রেশনের পর ঠিক এখানেই ফেরত আসবে (কার্ট save থাকে)
+      if (!Auth.get()) {
+        location.href = '/account.html?next=' + encodeURIComponent('/checkout.html');
+        return;
+      }
       const params = new URLSearchParams(location.search);
       if (params.get('payment') === 'failed') toast('পেমেন্ট সম্পন্ন হয়নি — আবার চেষ্টা করুন', true);
 
@@ -529,6 +538,7 @@
         Auth.api('/me').then((prof) => {
           if (prof.address && !$('#f-address').value) $('#f-address').value = prof.address;
           if (prof.name && !$('#f-name').value) $('#f-name').value = prof.name;
+          if (prof.email && !$('#f-email').value) $('#f-email').value = prof.email;
         }).catch(() => {});
       }
 
@@ -638,7 +648,18 @@
     async success() {
       const p = new URLSearchParams(location.search);
       const orderNo = p.get('orderNo'), phone = p.get('phone');
-      if (!orderNo || !phone) return;
+      const denied = () => {
+        document.querySelector('main').innerHTML = `
+          <div class="card" style="max-width:520px;margin:40px auto;text-align:center;padding:36px 26px">
+            <h1 style="font-family:var(--font-display);margin-bottom:8px">⛔ অ্যাক্সেস নেই</h1>
+            <p style="color:var(--ink-soft)">এই অর্ডারটা পাওয়া যায়নি অথবা এটা দেখার অনুমতি আপনার নেই। নিজের অর্ডার দেখতে অর্ডার নম্বর আর যে ফোন নম্বরে অর্ডার করেছেন সেটা দিয়ে ট্র্যাক করুন।</p>
+            <div style="display:flex;gap:10px;justify-content:center;margin-top:20px;flex-wrap:wrap">
+              <a href="/track.html" class="btn btn-primary">অর্ডার ট্র্যাক করুন</a>
+              <a href="/" class="btn btn-ghost">হোমে ফিরুন</a>
+            </div>
+          </div>`;
+      };
+      if (!orderNo || !phone) return denied();
       try {
         const o = await api('/orders/track', { method: 'POST', body: { orderNo, phone } });
         $('#suc-details').innerHTML = `
@@ -646,7 +667,7 @@
           <div class="summary-row"><span>পেমেন্ট</span><strong>${o.payment.status === 'paid' ? '✅ পেইড' : o.payment.status}${o.payment.trxID ? ` (TrxID: ${esc(o.payment.trxID)})` : ''}</strong></div>
           ${o.codDue > 0 ? `<div class="summary-row"><span>ডেলিভারিতে দিতে হবে</span><strong>${bd(o.codDue)}</strong></div>` : ''}
           <div class="summary-row total"><span>মোট</span><span>${bd(o.total)}</span></div>`;
-      } catch (e) { $('#suc-details').innerHTML = `<p>${esc(e.message)}</p>`; }
+      } catch (e) { denied(); }
     },
 
     /* ----- tracking ----- */
@@ -707,26 +728,69 @@
     account() {
       const root = $('#account-root');
       const ST = { awaiting_payment: 'পেমেন্টের অপেক্ষায়', confirmed: 'কনফার্মড', processing: 'প্রসেসিং', shipped: 'কুরিয়ারে', delivered: 'ডেলিভার্ড', cancelled: 'বাতিল', returned: 'রিটার্নড' };
+      // ?next= sanitize — শুধু নিজের সাইটের path (open redirect ব্লক)
+      const rawNext = new URLSearchParams(location.search).get('next') || '';
+      const nextUrl = rawNext.startsWith('/') && !rawNext.startsWith('//') ? rawNext : '';
+      const done = (d) => {
+        Auth.set(d);
+        location.href = nextUrl || '/account.html';
+      };
+      if (Auth.get() && nextUrl) { location.href = nextUrl; return; }
 
+      /* ---- OTP ভিউ ---- */
+      const renderOtp = (phone, email) => {
+        root.innerHTML = `
+          <div class="card" style="max-width:460px;margin:auto">
+            <h2 style="font-family:var(--font-display);margin-bottom:6px">📧 ইমেইল ভেরিফাই করুন</h2>
+            <p style="color:var(--ink-soft);font-size:.92rem">${email ? `<strong>${esc(email)}</strong>-এ` : 'আপনার ইমেইলে'} ৬ ডিজিটের কোড পাঠানো হয়েছে। Inbox-এ না পেলে Spam ফোল্ডার দেখুন।</p>
+            <form id="otp-form" class="form-grid" style="margin-top:14px">
+              <div><label>ভেরিফিকেশন কোড</label>
+                <input id="otp-code" required pattern="[0-9]{6}" maxlength="6" inputmode="numeric" autocomplete="one-time-code"
+                  style="letter-spacing:10px;font-size:1.4rem;text-align:center;font-weight:700"></div>
+              <button class="btn btn-primary" type="submit">ভেরিফাই করুন</button>
+            </form>
+            <p style="margin-top:14px;font-size:.9rem">কোড আসেনি?
+              <a href="#" id="otp-resend" style="color:var(--brand);font-weight:700">কোড আবার পাঠান</a></p>
+          </div>`;
+        $('#otp-form').addEventListener('submit', async (e) => {
+          e.preventDefault();
+          try {
+            const d = await api('/auth/verify-otp', { method: 'POST', body: { phone, otp: $('#otp-code').value.trim() } });
+            toast('অ্যাকাউন্ট ভেরিফায়েড ✓');
+            done(d);
+          } catch (err) { toast(err.message, true); }
+        });
+        $('#otp-resend').addEventListener('click', async (e) => {
+          e.preventDefault();
+          try {
+            const d = await api('/auth/resend-otp', { method: 'POST', body: { phone } });
+            toast(`নতুন কোড গেছে: ${d.email}`);
+          } catch (err) { toast(err.message, true); }
+        });
+      };
+
+      /* ---- লগইন/রেজিস্টার ---- */
       const renderAuth = () => {
         root.innerHTML = `
+          ${nextUrl ? '<p style="text-align:center;background:#fff8e8;border:1px solid #f3dfae;border-radius:10px;padding:10px 14px;margin-bottom:14px">🛒 অর্ডার কনফার্ম করতে লগইন বা অ্যাকাউন্ট লাগবে — আপনার কার্ট save করা আছে, শেষ করেই চেকআউটে ফিরবেন।</p>' : ''}
           <div class="card">
             <div class="tabs" style="margin-bottom:18px">
-              <button class="active" data-t="login">লগইন</button>
-              <button data-t="register">নতুন অ্যাকাউন্ট</button>
+              <button class="active" data-t="login" type="button">লগইন</button>
+              <button data-t="register" type="button">নতুন অ্যাকাউন্ট</button>
             </div>
             <form id="auth-login" class="form-grid">
-              <div><label>ফোন নম্বর</label><input id="lg-phone" required pattern="(\\+8801[3-9][0-9]{8}|01[3-9][0-9]{8})" placeholder="01XXXXXXXXX" inputmode="tel"></div>
-              <div><label>পাসওয়ার্ড</label><input id="lg-pass" type="password" required minlength="6"></div>
+              <div><label>ফোন নম্বর</label><input id="lg-phone" required pattern="(\+8801[3-9][0-9]{8}|01[3-9][0-9]{8})" placeholder="01XXXXXXXXX" inputmode="tel"></div>
+              <div><label>পাসওয়ার্ড</label><input id="lg-pass" type="password" required></div>
               <button class="btn btn-primary" type="submit">লগইন করুন</button>
             </form>
             <form id="auth-register" class="form-grid" hidden>
               <div><label>আপনার নাম</label><input id="rg-name" required minlength="2"></div>
-              <div><label>ফোন নম্বর</label><input id="rg-phone" required pattern="(\\+8801[3-9][0-9]{8}|01[3-9][0-9]{8})" placeholder="01XXXXXXXXX বা +8801XXXXXXXXX" inputmode="tel"></div>
-              <div><label>পাসওয়ার্ড (কমপক্ষে ৬ ক্যারেক্টার)</label><input id="rg-pass" type="password" required minlength="6"></div>
+              <div><label>ফোন নম্বর</label><input id="rg-phone" required pattern="(\+8801[3-9][0-9]{8}|01[3-9][0-9]{8})" placeholder="01XXXXXXXXX" inputmode="tel"></div>
+              <div><label>ইমেইল (ভেরিফিকেশন কোড যাবে)</label><input id="rg-email" type="email" required maxlength="120" placeholder="you@gmail.com"></div>
+              <div><label>পাসওয়ার্ড (কমপক্ষে ৮ ক্যারেক্টার)</label><input id="rg-pass" type="password" required minlength="8"></div>
               <button class="btn btn-primary" type="submit">অ্যাকাউন্ট খুলুন</button>
             </form>
-            <p style="font-size:.85rem;color:var(--ink-soft);margin-top:14px">অ্যাকাউন্ট ছাড়াও অর্ডার করা যায়। লগইন থাকা অবস্থায় করা অর্ডারগুলো হিস্টোরিতে জমা হয় আর চেকআউটে তথ্য অটো-ফিল হয়। (গেস্ট অর্ডার ট্র্যাক করতে অর্ডার নম্বর + ফোন — ট্র্যাক পেজে।)</p>
+            <p style="font-size:.85rem;color:var(--ink-soft);margin-top:14px">অর্ডার করতে ভেরিফায়েড অ্যাকাউন্ট লাগে — এতে আপনার অর্ডার হিস্টোরি সুরক্ষিত থাকে আর চেকআউটে তথ্য অটো-ফিল হয়।</p>
           </div>`;
         root.querySelector('.tabs').addEventListener('click', (e) => {
           const b = e.target.closest('[data-t]');
@@ -737,17 +801,33 @@
         });
         $('#auth-login').addEventListener('submit', async (e) => {
           e.preventDefault();
+          const phone = $('#lg-phone').value.trim();
           try {
-            const d = await api('/auth/login', { method: 'POST', body: { phone: $('#lg-phone').value.trim(), password: $('#lg-pass').value } });
-            Auth.set(d); location.reload();
-          } catch (err) { toast(err.message, true); }
+            const d = await api('/auth/login', { method: 'POST', body: { phone, password: $('#lg-pass').value } });
+            done(d);
+          } catch (err) {
+            if (err.data?.needVerify) {
+              toast('আগে ইমেইল ভেরিফাই করুন', true);
+              renderOtp(phone, err.data.email);
+            } else toast(err.message, true);
+          }
         });
         $('#auth-register').addEventListener('submit', async (e) => {
           e.preventDefault();
+          const phone = $('#rg-phone').value.trim();
           try {
-            const d = await api('/auth/register', { method: 'POST', body: { name: $('#rg-name').value.trim(), phone: $('#rg-phone').value.trim(), password: $('#rg-pass').value } });
-            Auth.set(d); toast('অ্যাকাউন্ট তৈরি হয়েছে ✓'); location.reload();
-          } catch (err) { toast(err.message, true); }
+            const d = await api('/auth/register', { method: 'POST', body: {
+              name: $('#rg-name').value.trim(),
+              phone,
+              email: $('#rg-email').value.trim(),
+              password: $('#rg-pass').value,
+            }});
+            toast('কোড পাঠানো হয়েছে — ইমেইল চেক করুন');
+            renderOtp(phone, d.email);
+          } catch (err) {
+            if (err.data?.pendingVerify) renderOtp(phone, '');
+            toast(err.message, true);
+          }
         });
       };
 
