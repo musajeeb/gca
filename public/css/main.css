@@ -56,9 +56,7 @@ input, select, textarea { font-family: inherit; font-size: 1rem; }
 .gw-option input { accent-color: var(--brand); }
 
 /* ---------- Header ---------- */
-.site-header.hdr-hide { transform: translateY(-100%); }
 .site-header {
-  transition: transform .28s ease;
   position: sticky; top: 0; z-index: 50;
   background: rgba(255, 255, 255, 0.92); backdrop-filter: blur(10px);
   border-bottom: 1px solid var(--line);
@@ -89,6 +87,7 @@ input, select, textarea { font-family: inherit; font-size: 1rem; }
 .search-drop .sd-p { font-weight: 800; font-family: var(--font-display); color: var(--brand-deep); white-space: nowrap; }
 .search-drop .sd-all { display: block; text-align: center; padding: 11px; font-weight: 700; color: var(--brand); background: #f8fafc; }
 .search-drop .sd-empty { padding: 16px; text-align: center; color: var(--ink-soft); font-size: .92rem; }
+.hamburger { display: none; border: 1.5px solid var(--line); background: #fff; border-radius: 10px; font-size: 1.25rem; line-height: 1; padding: 8px 12px; color: var(--ink); }
 .header-actions { display: flex; gap: 10px; margin-left: auto; }
 .cart-btn {
   position: relative; display: flex; align-items: center; gap: 8px;
@@ -336,6 +335,28 @@ input, select, textarea { font-family: inherit; font-size: 1rem; }
   .hero { padding: 34px 0 26px; }
   /* মোবাইলে এক লাইনে ২টা প্রোডাক্ট */
   .product-grid { grid-template-columns: repeat(2, 1fr); gap: 12px; }
+
+  /* ---- মোবাইল header: fixed + compact-on-scroll ---- */
+  .site-header { position: fixed; top: 0; left: 0; right: 0; z-index: 300; }
+  body { padding-top: var(--hdr-h, 168px); }
+  .hamburger { display: inline-flex; }
+  /* compact: শুধু লোগো + কার্ট + hamburger */
+  .site-header.hdr-compact .search-wrap,
+  .site-header.hdr-compact .nav-strip,
+  .site-header.hdr-compact .login-link { display: none; }
+  .site-header.hdr-compact .header-inner { padding-block: 8px; }
+  .site-header.hdr-compact { box-shadow: 0 4px 16px -8px rgba(11,27,43,.18); }
+  /* hamburger খুললে সার্চ+মেনু+লগইন dropdown হয়ে নামে (fixed header-এর ভেতরেই, content overlay করে) */
+  .site-header.hdr-compact.menu-open .search-wrap,
+  .site-header.hdr-compact.menu-open .nav-strip { display: block; }
+  .site-header.hdr-compact.menu-open .login-link { display: inline-flex; }
+  .site-header.hdr-compact.menu-open { box-shadow: 0 18px 34px -14px rgba(11,27,43,.35); }
+
+  /* ---- কার্টে প্রোডাক্ট নাম পুরো প্রস্থ, qty control নামের নিচে ---- */
+  .cart-item { grid-template-columns: 74px minmax(0, 1fr); row-gap: 8px; align-items: start; }
+  .cart-item img { grid-row: 1 / span 2; }
+  .cart-item .t { -webkit-line-clamp: 3; font-size: .92rem; }
+  .cart-item .qty-box, .cart-item > strong { grid-column: 2; justify-self: start; }
   .product-thumb { padding: 10px; }
   .product-body { padding: 10px 12px 12px; gap: 6px; }
   .product-title { font-size: 0.88rem; min-height: 2.6em; }

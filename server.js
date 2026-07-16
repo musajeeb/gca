@@ -37,7 +37,9 @@ app.use(
   })
 );
 app.use(compression());
-app.use(express.json({ limit: '8mb' })); // AI image payloads
+// type-এ text/plain-ও নিই: পুরনো cached client Content-Type ছাড়া পাঠালে
+// ব্রাউজার text/plain বসায় — সেগুলোও JSON হিসেবে পার্স হবে (checkout rescue)
+app.use(express.json({ limit: '8mb', type: ['application/json', 'text/plain'] }));
 app.use(express.urlencoded({ extended: false }));
 app.use(mongoSanitize());
 
@@ -60,7 +62,15 @@ app.use('/api/admin/ai', aiRoutes);
 app.use('/api/payment', paymentRoutes);
 
 // ---------- Static ----------
-const staticOpts = { maxAge: process.env.NODE_ENV === 'production' ? '7d' : 0, etag: true };
+// html/js/css সবসময় revalidate (no-cache + ETag) — fix পাঠালে সাথে সাথে সবাই পাবে,
+// 304 হয় বলে খরচও নেই। বাকি অ্যাসেট ৭ দিন।
+const staticOpts = {
+  etag: true,
+  setHeaders: (res, filePath) => {
+    if (/\.(html|js|css)$/i.test(filePath)) res.set('Cache-Control', 'no-cache');
+    else res.set('Cache-Control', 'public, max-age=604800');
+  },
+};
 // ছবি MongoDB থেকে serve হয় — redeploy-এ হারায় না। ডিস্ক static টা পুরনো ফাইলের fallback।
 const { Image } = require('./src/models');
 app.get('/uploads/:name', async (req, res, nextFn) => {

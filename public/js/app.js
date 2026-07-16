@@ -20,24 +20,39 @@
     return data;
   };
 
-  /* মোবাইলে নিচে স্ক্রলে header লুকায়, উপরে উঠলে ফেরে */
-  function initHideOnScroll() {
+  /* মোবাইল header: টপে ফুল, স্ক্রল শুরু হলেই compact (লোগো + hamburger),
+     hamburger চাপলে সার্চ+মেনু+লগইন dropdown হিসেবে নামে। fixed + body padding —
+     তাই কোনো ফাঁকা/লাফ তৈরি হয় না। ডেস্কটপ অপরিবর্তিত। */
+  function initMobileHeader() {
     const hdr = document.querySelector('.site-header');
     if (!hdr) return;
-    let last = window.scrollY, ticking = false;
+    const mq = window.matchMedia('(max-width: 768px)');
+    const setH = () => {
+      if (!mq.matches) { document.documentElement.style.removeProperty('--hdr-h'); return; }
+      const compact = hdr.classList.contains('hdr-compact');
+      hdr.classList.remove('hdr-compact');
+      document.documentElement.style.setProperty('--hdr-h', hdr.offsetHeight + 'px');
+      if (compact) hdr.classList.add('hdr-compact');
+    };
+    setH();
+    window.addEventListener('resize', setH);
+    let ticking = false;
     window.addEventListener('scroll', () => {
-      if (ticking) return;
+      if (ticking || !mq.matches) return;
       ticking = true;
       requestAnimationFrame(() => {
         const y = window.scrollY;
-        if (window.innerWidth <= 768) {
-          if (y > last && y > 90) hdr.classList.add('hdr-hide');
-          else if (y < last - 4 || y <= 90) hdr.classList.remove('hdr-hide');
-        } else hdr.classList.remove('hdr-hide');
-        last = y;
+        if (y > 30 && !hdr.classList.contains('menu-open')) hdr.classList.add('hdr-compact');
+        else if (y <= 10) hdr.classList.remove('hdr-compact', 'menu-open');
         ticking = false;
       });
     }, { passive: true });
+    const btn = document.getElementById('mob-menu');
+    if (btn) btn.addEventListener('click', () => hdr.classList.toggle('menu-open'));
+    // মেনু থেকে কোথাও ক্লিক করলে dropdown বন্ধ
+    hdr.addEventListener('click', (e) => {
+      if (hdr.classList.contains('menu-open') && e.target.closest('a')) hdr.classList.remove('menu-open');
+    });
   }
 
   let toastEl;
@@ -107,8 +122,9 @@
           <div class="search-drop" id="search-drop" role="listbox"></div>
         </div>
         <div class="header-actions">
-          <a class="btn btn-ghost" href="/account.html" style="padding:9px 14px">${Auth.get() ? '👤 ' + esc(Auth.get().name.split(' ')[0]) : 'লগইন'}</a>
+          <a class="btn btn-ghost login-link" href="/account.html" style="padding:9px 14px">${Auth.get() ? '👤 ' + esc(Auth.get().name.split(' ')[0]) : 'লগইন'}</a>
           <a class="cart-btn" href="/cart.html">কার্ট <span class="cart-count">0</span></a>
+          <button class="hamburger" id="mob-menu" aria-label="মেনু" type="button">☰</button>
         </div>
       </div>
       <nav class="nav-strip"><div class="container" id="nav-collections">
@@ -799,7 +815,7 @@
       }
     } catch {}
     await renderChrome();
-    initHideOnScroll();
+    initMobileHeader();
     const page = document.body.dataset.page;
     if (pages[page]) pages[page]();
   });
