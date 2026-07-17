@@ -88,6 +88,7 @@ input, select, textarea { font-family: inherit; font-size: 1rem; }
 .search-drop .sd-all { display: block; text-align: center; padding: 11px; font-weight: 700; color: var(--brand); background: #f8fafc; }
 .search-drop .sd-empty { padding: 16px; text-align: center; color: var(--ink-soft); font-size: .92rem; }
 .hamburger { display: none; border: 1.5px solid var(--line); background: #fff; border-radius: 10px; font-size: 1.25rem; line-height: 1; padding: 8px 12px; color: var(--ink); }
+.icon-btn svg { width: 22px; height: 22px; display: block; }
 .header-actions { display: flex; gap: 10px; margin-left: auto; }
 .cart-btn {
   position: relative; display: flex; align-items: center; gap: 8px;
@@ -152,15 +153,15 @@ input, select, textarea { font-family: inherit; font-size: 1rem; }
 .collection-card img { width: 56px; height: 56px; object-fit: contain; margin: 0 auto 10px; }
 
 .product-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 18px; }
-/* লোডিংয়ের সময় skeleton — ডাটা এলে layout লাফায় না */
+.product-card img { aspect-ratio: 1; object-fit: cover; width: 100%; }
 .nav-strip { min-height: 44px; }
 .skel-card { border: 1px solid var(--line); border-radius: 14px; overflow: hidden; background: #fff; }
 .skel-card .si { aspect-ratio: 1; }
 .skel-card .sl { height: 14px; border-radius: 6px; margin: 12px 14px 8px; }
 .skel-card .sl.short { width: 55%; margin-top: 0; margin-bottom: 16px; }
 .skel { background: linear-gradient(90deg, #eef2f7 25%, #f7fafc 50%, #eef2f7 75%); background-size: 200% 100%; animation: shimmer 1.2s infinite; }
+.skel-line { height: 16px; border-radius: 8px; margin-bottom: 10px; }
 @keyframes shimmer { to { background-position: -200% 0; } }
-.collection-grid { min-height: 120px; }
 .product-card {
   background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius);
   overflow: hidden; display: flex; flex-direction: column; transition: transform 0.2s, box-shadow 0.25s, border-color 0.2s;
@@ -336,23 +337,26 @@ input, select, textarea { font-family: inherit; font-size: 1rem; }
   /* মোবাইলে এক লাইনে ২টা প্রোডাক্ট */
   .product-grid { grid-template-columns: repeat(2, 1fr); gap: 12px; }
 
-  /* ---- মোবাইল header: fixed + compact-on-scroll ---- */
+  /* ---- মোবাইল header: প্রথম সারিতে লোগো + আইকন, দ্বিতীয় সারিতে সার্চ ---- */
   .site-header { position: fixed; top: 0; left: 0; right: 0; z-index: 300; }
-  body { padding-top: var(--hdr-h, 168px); }
+  body { padding-top: var(--hdr-h, 150px); }
+  .header-inner { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+  .logo { flex: 1 1 auto; min-width: 0; font-size: 1.05rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .header-actions { flex: 0 0 auto; margin-left: auto; gap: 8px; }
+  .search-wrap { order: 3; flex: 1 1 100%; width: 100%; }
   .hamburger { display: inline-flex; }
-  /* compact: শুধু লোগো + কার্ট + hamburger */
+  /* compact: স্ক্রল শুরু হলেই শুধু লোগো + আইকন */
   .site-header.hdr-compact .search-wrap,
   .site-header.hdr-compact .nav-strip,
   .site-header.hdr-compact .login-link { display: none; }
   .site-header.hdr-compact .header-inner { padding-block: 8px; }
   .site-header.hdr-compact { box-shadow: 0 4px 16px -8px rgba(11,27,43,.18); }
-  /* hamburger খুললে সার্চ+মেনু+লগইন dropdown হয়ে নামে (fixed header-এর ভেতরেই, content overlay করে) */
-  .site-header.hdr-compact.menu-open .search-wrap,
+  .site-header.hdr-compact.menu-open .search-wrap { display: block; }
   .site-header.hdr-compact.menu-open .nav-strip { display: block; }
   .site-header.hdr-compact.menu-open .login-link { display: inline-flex; }
   .site-header.hdr-compact.menu-open { box-shadow: 0 18px 34px -14px rgba(11,27,43,.35); }
 
-  /* ---- কার্টে প্রোডাক্ট নাম পুরো প্রস্থ, qty control নামের নিচে ---- */
+  /* ---- কার্ট: নাম পুরো প্রস্থ, qty নিচে ---- */
   .cart-item { grid-template-columns: 74px minmax(0, 1fr); row-gap: 8px; align-items: start; }
   .cart-item img { grid-row: 1 / span 2; }
   .cart-item .t { -webkit-line-clamp: 3; font-size: .92rem; }

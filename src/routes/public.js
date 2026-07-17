@@ -329,13 +329,20 @@ const hashOtp = (code) => crypto.createHash('sha256').update(code + process.env.
 const genOtp = () => String(crypto.randomInt(100000, 1000000)); // 6 digit
 
 async function issueOtp(customer) {
+  // resend flood বন্ধ: ৬০ সেকেন্ডের আগে নতুন কোড না
+  if (customer.otpLastSent && Date.now() - customer.otpLastSent.getTime() < 60 * 1000) {
+    const wait = Math.ceil((60 * 1000 - (Date.now() - customer.otpLastSent.getTime())) / 1000);
+    throw Object.assign(new Error(`${wait} সেকেন্ড পরে আবার চেষ্টা করুন`), { status: 429 });
+  }
   const code = genOtp();
   customer.otpHash = hashOtp(code);
   customer.otpExpires = new Date(Date.now() + 10 * 60 * 1000);
   customer.otpTries = 0;
+  customer.otpLastSent = new Date();
   await customer.save();
   await sendOtpMail(customer.email, customer.name, code); // ব্যর্থ হলে throw
 }
+const zEmail = z.string().trim().email('সঠিক ইমেইল দিন').max(120).toLowerCase();
 
 router.post('/auth/register', loginLimiter, validate(z.object({
   name: z.string().trim().min(2).max(80),
@@ -359,11 +366,11 @@ router.post('/auth/register', loginLimiter, validate(z.object({
 });
 
 router.post('/auth/verify-otp', loginLimiter, validate(z.object({
-  phone: zPhone,
+  email: zEmail,
   otp: z.string().trim().regex(/^\d{6}$/, '৬ ডিজিটের কোড দিন'),
 })), async (req, res, next) => {
   try {
-    const c = await Customer.findOne({ phone: req.body.phone, active: true }).select('+otpHash +otpExpires +otpTries');
+    const c = await Customer.findOne({ email: req.body.email, active: true }).select('+otpHash +otpExpires +otpTries');
     if (!c) return res.status(404).json({ error: 'অ্যাকাউন্ট পাওয়া যায়নি' });
     if (c.emailVerified) return res.json({ token: signCustomerToken(c), name: c.name, phone: c.phone });
     if (!c.otpHash || !c.otpExpires || c.otpExpires < new Date()) {
@@ -382,32 +389,67 @@ router.post('/auth/verify-otp', loginLimiter, validate(z.object({
   } catch (e) { next(e); }
 });
 
-router.post('/auth/resend-otp', loginLimiter, validate(z.object({ phone: zPhone })), async (req, res, next) => {
+router.post('/auth/resend-otp', loginLimiter, validate(z.object({ email: zEmail })), async (req, res, next) => {
   try {
-    const c = await Customer.findOne({ phone: req.body.phone, active: true });
+    const c = await Customer.findOne({ email: req.body.email, active: true }).select('+otpLastSent');
     if (!c) return res.status(404).json({ error: 'অ্যাকাউন্ট পাওয়া যায়নি' });
     if (c.emailVerified) return res.status(400).json({ error: 'ইমেইল আগেই ভেরিফায়েড — লগইন করুন' });
-    if (!c.email) return res.status(400).json({ error: 'এই অ্যাকাউন্টে ইমেইল নেই — নতুন করে রেজিস্টার করুন' });
     await issueOtp(c);
     res.json({ ok: true, email: c.email });
   } catch (e) {
-    res.status(502).json({ error: 'মেইল পাঠানো যায়নি — অ্যাডমিনের ইমেইল কনফিগ চেক করা দরকার' });
+    res.status(e.status || 502).json({ error: e.status === 429 ? e.message : 'মেইল পাঠানো যায়নি — কিছুক্ষণ পরে চেষ্টা করুন' });
   }
 });
 
 router.post('/auth/login', loginLimiter, validate(z.object({
-  phone: zPhone,
+  email: zEmail,
   password: z.string().min(1).max(100),
 })), async (req, res, next) => {
   try {
-    const c = await Customer.findOne({ phone: req.body.phone, active: true }).select('+password');
-    const bad = () => res.status(401).json({ error: 'ফোন নম্বর বা পাসওয়ার্ড ভুল' });
+    const c = await Customer.findOne({ email: req.body.email, active: true }).select('+password');
+    const bad = () => res.status(401).json({ error: 'ইমেইল বা পাসওয়ার্ড ভুল' });
     if (!c) return bad();
     const ok = await bcrypt.compare(req.body.password, c.password);
     if (!ok) return bad();
     if (!c.emailVerified) {
       return res.status(403).json({ error: 'ইমেইল ভেরিফাই করা হয়নি — কোড দিয়ে ভেরিফাই করুন', needVerify: true, email: c.email || '' });
     }
+    res.json({ token: signCustomerToken(c), name: c.name, phone: c.phone, address: c.address });
+  } catch (e) { next(e); }
+});
+
+/* ---------- পাসওয়ার্ড ভুলে গেছেন: ইমেইলে কোড → নতুন পাসওয়ার্ড ---------- */
+router.post('/auth/forgot', loginLimiter, validate(z.object({ email: zEmail })), async (req, res) => {
+  try {
+    const c = await Customer.findOne({ email: req.body.email, active: true }).select('+otpLastSent');
+    // অ্যাকাউন্ট আছে কি নেই সেটা ফাঁস করি না (enumeration বন্ধ) — থাকলে কোড যায়
+    if (c) await issueOtp(c);
+    res.json({ ok: true, message: 'এই ইমেইলে অ্যাকাউন্ট থাকলে কোড পাঠানো হয়েছে' });
+  } catch (e) {
+    res.status(e.status || 502).json({ error: e.status === 429 ? e.message : 'মেইল পাঠানো যায়নি — কিছুক্ষণ পরে চেষ্টা করুন' });
+  }
+});
+
+router.post('/auth/reset', loginLimiter, validate(z.object({
+  email: zEmail,
+  otp: z.string().trim().regex(/^\d{6}$/, '৬ ডিজিটের কোড দিন'),
+  newPassword: z.string().min(8, 'পাসওয়ার্ড কমপক্ষে ৮ ক্যারেক্টার').max(100),
+})), async (req, res, next) => {
+  try {
+    const c = await Customer.findOne({ email: req.body.email, active: true }).select('+otpHash +otpExpires +otpTries');
+    if (!c || !c.otpHash || !c.otpExpires || c.otpExpires < new Date()) {
+      return res.status(400).json({ error: 'কোড ভুল বা মেয়াদ শেষ — আবার কোড নিন' });
+    }
+    if (c.otpTries >= 5) return res.status(429).json({ error: 'অনেকবার ভুল হয়েছে — নতুন কোড নিন' });
+    if (hashOtp(req.body.otp) !== c.otpHash) {
+      c.otpTries += 1;
+      await c.save();
+      return res.status(400).json({ error: `কোড ভুল (${5 - c.otpTries} বার বাকি)` });
+    }
+    c.password = await bcrypt.hash(req.body.newPassword, 12);
+    c.emailVerified = true; // ইমেইলের দখল প্রমাণিত
+    c.otpHash = undefined; c.otpExpires = undefined; c.otpTries = 0;
+    await c.save();
     res.json({ token: signCustomerToken(c), name: c.name, phone: c.phone, address: c.address });
   } catch (e) { next(e); }
 });

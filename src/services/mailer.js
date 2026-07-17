@@ -8,6 +8,71 @@
  * মেইল পাঠানো fire-and-forget — ব্যর্থ হলে অর্ডার আটকায় না, শুধু লগ হয়।
  */
 const nodemailer = require('nodemailer');
+const PDFDocument = require('pdfkit');
+
+/** ফুল বিল PDF (ইংরেজি লেআউট — PDF-এ বাংলা ফন্ট এমবেড করা নেই বলে labels English) */
+function buildInvoicePdf(order) {
+  return new Promise((resolve, reject) => {
+    const doc = new PDFDocument({ size: 'A4', margin: 46 });
+    const chunks = [];
+    doc.on('data', (c) => chunks.push(c));
+    doc.on('end', () => resolve(Buffer.concat(chunks)));
+    doc.on('error', reject);
+    const Tk = (n) => 'Tk ' + Number(n || 0).toLocaleString('en-US');
+
+    doc.fontSize(20).font('Helvetica-Bold').text(process.env.SITE_NAME || 'NetBazar');
+    doc.fontSize(9).font('Helvetica').fillColor('#555')
+      .text('Invoice / Order Receipt', { continued: false });
+    doc.moveDown(0.8);
+    doc.fillColor('#000').fontSize(11).font('Helvetica-Bold').text(`Invoice: ${order.orderNo}`);
+    doc.font('Helvetica').fontSize(10)
+      .text(`Date: ${new Date(order.createdAt || Date.now()).toLocaleString('en-GB')}`)
+      .text(`Customer: ${order.customer.name}`)
+      .text(`Phone: ${order.customer.phone}`)
+      .text(`Address: ${order.customer.address}`)
+      .text(`Payment: ${order.paymentMethod} (${order.payment.status})${order.payment.trxID ? ' TrxID: ' + order.payment.trxID : ''}`);
+    doc.moveDown(0.8);
+
+    // টেবিল
+    const x = doc.page.margins.left, w = doc.page.width - x * 2;
+    const col = { item: x, qty: x + w - 150, price: x + w - 110, total: x + w - 55 };
+    doc.font('Helvetica-Bold').fontSize(9);
+    doc.text('ITEM', col.item, doc.y, { width: col.qty - col.item - 8 });
+    const headY = doc.y - 11;
+    doc.text('QTY', col.qty, headY).text('PRICE', col.price, headY).text('TOTAL', col.total, headY);
+    doc.moveTo(x, doc.y + 3).lineTo(x + w, doc.y + 3).strokeColor('#999').stroke();
+    doc.moveDown(0.5);
+    doc.font('Helvetica').fontSize(9);
+    for (const it of order.items) {
+      const y = doc.y;
+      const nm = `${it.title}${it.variantName && it.variantName !== 'Default' ? ` (${it.variantName})` : ''} [${it.sku}]`;
+      doc.text(nm, col.item, y, { width: col.qty - col.item - 8 });
+      const rowY = y;
+      doc.text(String(it.qty), col.qty, rowY).text(Tk(it.price), col.price, rowY).text(Tk(it.price * it.qty), col.total, rowY);
+      doc.moveDown(0.35);
+    }
+    doc.moveTo(x, doc.y + 2).lineTo(x + w, doc.y + 2).strokeColor('#999').stroke();
+    doc.moveDown(0.5);
+    const right = (label, val, bold) => {
+      doc.font(bold ? 'Helvetica-Bold' : 'Helvetica').fontSize(bold ? 11 : 9);
+      const y = doc.y;
+      doc.text(label, col.price - 60, y, { width: 105, align: 'right' });
+      doc.text(val, col.total, y);
+      doc.moveDown(0.25);
+    };
+    right('Subtotal', Tk(order.subtotal));
+    if (order.discount) right('Discount', '-' + Tk(order.discount));
+    right('Delivery', Tk(order.deliveryFee));
+    right('TOTAL', Tk(order.total), true);
+    if (order.payment.amountPaid) right('Paid', Tk(order.payment.amountPaid));
+    if (order.codDue > 0) right('Due on delivery', Tk(order.codDue), true);
+
+    doc.moveDown(1.2);
+    doc.font('Helvetica').fontSize(8).fillColor('#777')
+      .text(`Track your order: ${process.env.SITE_URL || ''}/track.html  (Order No + Phone)`, x);
+    doc.end();
+  });
+}
 
 let transporter = null;
 function getTransporter() {
@@ -21,13 +86,13 @@ function getTransporter() {
   return transporter;
 }
 
-async function sendMail({ to, subject, html }) {
+async function sendMail({ to, subject, html, attachments }) {
   const t = getTransporter();
   if (!t || !to) return false;
   try {
     await t.sendMail({
       from: `"${process.env.SITE_NAME || 'NetBazar'}" <${process.env.SMTP_USER}>`,
-      to, subject, html,
+      to, subject, html, attachments,
     });
     return true;
   } catch (e) {
@@ -64,10 +129,26 @@ function wrap(title, inner) {
   </div>`;
 }
 
-/** নতুন অর্ডার এলে অ্যাডমিনকে */
-function notifyNewOrder(o) {
+/** নতুন অর্ডার: অ্যাডমিন + কাস্টমার (চেকআউটের ইমেইলে, ফুল বিল PDF-সহ) */
+async function notifyNewOrder(o) {
+  let pdf = null;
+  try { pdf = await buildInvoicePdf(o); } catch (e) { console.error('PDF তৈরি ব্যর্থ:', e.message); }
+  const attachments = pdf ? [{ filename: `invoice-${o.orderNo}.pdf`, content: pdf }] : undefined;
+  if (o.customer.email) {
+    sendMail({
+      to: o.customer.email,
+      subject: `আপনার অর্ডার ${o.orderNo} আমরা পেয়েছি ✓`,
+      html: wrap('অর্ডার কনফার্মড — ধন্যবাদ!', `
+        <p>প্রিয় ${esc(o.customer.name)},</p>
+        <p>আপনার অর্ডার <strong>${esc(o.orderNo)}</strong> আমরা পেয়েছি। ফুল বিল PDF সংযুক্ত।</p>
+        ${orderTable(o)}
+        <p>ট্র্যাক করুন (অর্ডার নম্বর + ফোন): <a href="${process.env.SITE_URL}/track.html">${process.env.SITE_URL}/track.html</a></p>`),
+      attachments,
+    });
+  }
   const adminTo = process.env.MAIL_ADMIN_TO || process.env.SMTP_USER;
   sendMail({
+    attachments,
     to: adminTo,
     subject: `🛒 নতুন অর্ডার ${o.orderNo} — ${bd(o.total)} (${o.customer.name})`,
     html: wrap(`নতুন অর্ডার: ${esc(o.orderNo)}`, `
@@ -80,9 +161,13 @@ function notifyNewOrder(o) {
 }
 
 /** পেমেন্ট কনফার্ম হলে — অ্যাডমিন + কাস্টমার (ইমেইল দিয়ে থাকলে) */
-function notifyPaid(o) {
+async function notifyPaid(o) {
+  let pdf = null;
+  try { pdf = await buildInvoicePdf(o); } catch (e) { console.error('PDF তৈরি ব্যর্থ:', e.message); }
+  const attachments = pdf ? [{ filename: `invoice-${o.orderNo}.pdf`, content: pdf }] : undefined;
   const adminTo = process.env.MAIL_ADMIN_TO || process.env.SMTP_USER;
   sendMail({
+    attachments,
     to: adminTo,
     subject: `✅ পেমেন্ট পেইড — ${o.orderNo} (${bd(o.payment.amountPaid)})`,
     html: wrap(`পেমেন্ট কনফার্মড: ${esc(o.orderNo)}`, `
@@ -92,6 +177,7 @@ function notifyPaid(o) {
   });
   if (o.customer.email) {
     sendMail({
+      attachments,
       to: o.customer.email,
       subject: `আপনার অর্ডার ${o.orderNo} কনফার্ম হয়েছে ✓`,
       html: wrap('অর্ডার কনফার্মড — ধন্যবাদ!', `

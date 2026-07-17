@@ -117,7 +117,7 @@
 
     $('#site-header').innerHTML = `
       <div class="container header-inner">
-        <a href="/" class="logo">${settings.logo ? `<img src="${esc(settings.logo)}" alt="${esc(name)}">` : `<span class="led" aria-hidden="true"><i></i><i></i><i></i><i></i></span>${esc(name)}`}</a>
+        <a href="/" class="logo">${settings.logo ? `<img src="${esc(settings.logo)}" alt="${esc(name)}">` : esc(name)}</a>
         <div class="search-wrap">
           <form class="search-form" action="/collection.html" method="get" role="search" autocomplete="off">
             <input type="search" name="q" id="global-search" placeholder="রাউটার, সুইচ, ক্যাবল খুঁজুন…" aria-label="সার্চ">
@@ -126,8 +126,13 @@
           <div class="search-drop" id="search-drop" role="listbox"></div>
         </div>
         <div class="header-actions">
-          <a class="btn btn-ghost login-link" href="/account.html" style="padding:9px 14px">${Auth.get() ? '👤 ' + esc(Auth.get().name.split(' ')[0]) : 'লগইন'}</a>
-          <a class="cart-btn" href="/cart.html">কার্ট <span class="cart-count">0</span></a>
+          <a class="btn btn-ghost login-link icon-btn" href="/account.html" aria-label="${Auth.get() ? 'আমার অ্যাকাউন্ট' : 'লগইন'}" title="${Auth.get() ? esc(Auth.get().name.split(' ')[0]) : 'লগইন'}" style="padding:9px 12px">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 3.6-6.5 8-6.5s8 2.5 8 6.5"/></svg>
+          </a>
+          <a class="cart-btn icon-btn" href="/cart.html" aria-label="কার্ট" style="gap:6px">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="20" r="1.6"/><circle cx="17" cy="20" r="1.6"/><path d="M3 3h2.5l2.2 11.2a2 2 0 0 0 2 1.6h6.8a2 2 0 0 0 2-1.6L20 7H6"/></svg>
+            <span class="cart-count">0</span>
+          </a>
           <button class="hamburger" id="mob-menu" aria-label="মেনু" type="button">☰</button>
         </div>
       </div>
@@ -147,7 +152,7 @@
             ${settings.address ? `<p style="font-size:.9rem;opacity:.85;margin-top:6px">${esc(settings.address)}</p>` : ''}
           </div>
         </div>
-        <div class="footer-bottom"><span>© ${new Date().getFullYear()} ${esc(name)}</span><span>পেমেন্ট: bKash</span></div>
+        <div class="footer-bottom"><span>© ${new Date().getFullYear()} ${esc(name)}</span><span style="opacity:.55">client v17</span></div>
       </div>`;
 
     try {
@@ -259,14 +264,6 @@
       $('#home-featured').innerHTML = skelCards(8);
       $('#home-latest').innerHTML = skelCards(8);
       try {
-        const cols = await api('/collections');
-        $('#home-collections').innerHTML = cols.map((c) => `
-          <a class="collection-card reveal" href="/c/${esc(c.slug)}">
-            ${c.image ? `<img src="${esc(c.image)}" alt="" loading="lazy">` : `<span class="led" style="justify-content:center;margin:0 auto 10px"><i></i><i></i><i></i><i></i></span>`}
-            ${esc(c.name)}
-          </a>`).join('') || '<p class="empty-state">কালেকশন যোগ হয়নি এখনো</p>';
-      } catch {}
-      try {
         const feat = await api('/products?featured=1&limit=8');
         $('#home-featured').innerHTML = feat.items.map(productCard).join('') || '<p class="empty-state">ফিচারড প্রোডাক্ট নেই</p>';
         const latest = await api('/products?sort=newest&limit=8');
@@ -314,6 +311,17 @@
     /* ----- product detail ----- */
     async product() {
       const slug = location.pathname.split('/p/')[1];
+      // ডাটা আসার আগে skeleton — layout লাফাবে না
+      $('#pd-root').innerHTML = `
+        <div class="pd-grid">
+          <div class="skel" style="aspect-ratio:1;border-radius:14px"></div>
+          <div>
+            <div class="skel skel-line" style="width:85%"></div>
+            <div class="skel skel-line" style="width:60%"></div>
+            <div class="skel skel-line" style="width:40%;height:28px;margin-top:16px"></div>
+            <div class="skel skel-line" style="width:100%;height:46px;margin-top:22px;border-radius:12px"></div>
+          </div>
+        </div>`;
       let data;
       try { data = await api('/products/' + encodeURIComponent(slug)); }
       catch (e) { $('#pd-root').innerHTML = `<div class="empty-state"><p>${esc(e.message)}</p></div>`; return; }
@@ -508,6 +516,13 @@
           </div>`;
       };
       $('#cart-root').addEventListener('click', (e) => {
+        const co = e.target.closest('a[href="/checkout.html"]');
+        if (co && !Auth.get()) {
+          e.preventDefault();
+          toast('🔒 অর্ডারের নিরাপত্তার জন্য আগে লগইন করুন — আপনার কার্ট save থাকবে');
+          setTimeout(() => { location.href = '/account.html?next=' + encodeURIComponent('/checkout.html'); }, 1100);
+          return;
+        }
         const rm = e.target.closest('[data-rm]'); if (rm) { Cart.remove(rm.dataset.rm); render(); return; }
         const inc = e.target.closest('[data-inc]'); if (inc) { const it = Cart.get().find((x) => x.variantId === inc.dataset.inc); Cart.setQty(inc.dataset.inc, it.qty + 1); render(); return; }
         const dec = e.target.closest('[data-dec]'); if (dec) { const it = Cart.get().find((x) => x.variantId === dec.dataset.dec); Cart.setQty(dec.dataset.dec, it.qty - 1); render(); }
@@ -637,6 +652,11 @@
           Cart.clear();
           location.href = pay.url;
         } catch (err) {
+          if (err.data && (err.data.error || '').includes('লগইন')) {
+            toast('🔒 অর্ডারের নিরাপত্তার জন্য আগে লগইন করুন');
+            setTimeout(() => { location.href = '/account.html?next=' + encodeURIComponent('/checkout.html'); }, 1000);
+            return;
+          }
           toast(err.message, true);
           btn.disabled = false; btn.textContent = 'অর্ডার কনফার্ম করুন';
         }
@@ -698,6 +718,7 @@
 
     /* ----- blog list / post / cms page ----- */
     async blog() {
+      $('#blog-grid').innerHTML = skelCards(6);
       try {
         const posts = await api('/blog');
         $('#blog-grid').innerHTML = posts.map((b) => `
@@ -737,34 +758,67 @@
       };
       if (Auth.get() && nextUrl) { location.href = nextUrl; return; }
 
-      /* ---- OTP ভিউ ---- */
-      const renderOtp = (phone, email) => {
+      /* ---- OTP ভিউ (mode: 'verify' | 'reset') — কাউন্টডাউন + resend cooldown ---- */
+      const renderOtp = (email, mode = 'verify') => {
         root.innerHTML = `
           <div class="card" style="max-width:460px;margin:auto">
-            <h2 style="font-family:var(--font-display);margin-bottom:6px">📧 ইমেইল ভেরিফাই করুন</h2>
-            <p style="color:var(--ink-soft);font-size:.92rem">${email ? `<strong>${esc(email)}</strong>-এ` : 'আপনার ইমেইলে'} ৬ ডিজিটের কোড পাঠানো হয়েছে। Inbox-এ না পেলে Spam ফোল্ডার দেখুন।</p>
+            <h2 style="font-family:var(--font-display);margin-bottom:6px">📧 ${mode === 'reset' ? 'পাসওয়ার্ড রিসেট' : 'ইমেইল ভেরিফাই করুন'}</h2>
+            <p style="color:var(--ink-soft);font-size:.92rem"><strong>${esc(email)}</strong>-এ ৬ ডিজিটের কোড পাঠানো হয়েছে। Spam ফোল্ডারও দেখুন।
+              <span id="otp-timer" style="font-weight:700;color:var(--brand)"></span></p>
             <form id="otp-form" class="form-grid" style="margin-top:14px">
               <div><label>ভেরিফিকেশন কোড</label>
                 <input id="otp-code" required pattern="[0-9]{6}" maxlength="6" inputmode="numeric" autocomplete="one-time-code"
                   style="letter-spacing:10px;font-size:1.4rem;text-align:center;font-weight:700"></div>
-              <button class="btn btn-primary" type="submit">ভেরিফাই করুন</button>
+              ${mode === 'reset' ? '<div><label>নতুন পাসওয়ার্ড (কমপক্ষে ৮)</label><input id="otp-newpass" type="password" required minlength="8"></div>' : ''}
+              <button class="btn btn-primary" type="submit">${mode === 'reset' ? 'পাসওয়ার্ড বদলান' : 'ভেরিফাই করুন'}</button>
             </form>
             <p style="margin-top:14px;font-size:.9rem">কোড আসেনি?
-              <a href="#" id="otp-resend" style="color:var(--brand);font-weight:700">কোড আবার পাঠান</a></p>
+              <button type="button" id="otp-resend" class="btn btn-ghost btn-sm" style="padding:5px 12px">কোড আবার পাঠান</button></p>
           </div>`;
+        // ১০ মিনিটের মেয়াদ কাউন্টডাউন
+        let left = 10 * 60;
+        const timerEl = $('#otp-timer');
+        const tick = () => {
+          if (!document.body.contains(timerEl)) return;
+          const m = String(Math.floor(left / 60)).padStart(2, '0'), sec = String(left % 60).padStart(2, '0');
+          timerEl.textContent = left > 0 ? `⏳ ${m}:${sec}` : '— কোডের মেয়াদ শেষ, নতুন কোড নিন';
+          if (left-- > 0) setTimeout(tick, 1000);
+        };
+        tick();
+        // resend: ৬০ সেকেন্ড cooldown (সার্ভারেও একই নিয়ম আছে)
+        const rs = $('#otp-resend');
+        const cooldown = () => {
+          let c = 60;
+          rs.disabled = true;
+          const iv = setInterval(() => {
+            if (!document.body.contains(rs)) return clearInterval(iv);
+            rs.textContent = `আবার পাঠান (${c}s)`;
+            if (c-- <= 0) { clearInterval(iv); rs.disabled = false; rs.textContent = 'কোড আবার পাঠান'; }
+          }, 1000);
+        };
+        cooldown();
+        rs.addEventListener('click', async () => {
+          try {
+            await api(mode === 'reset' ? '/auth/forgot' : '/auth/resend-otp', { method: 'POST', body: { email } });
+            toast('নতুন কোড পাঠানো হয়েছে');
+            left = 10 * 60;
+            cooldown();
+          } catch (err) { toast(err.message, true); }
+        });
         $('#otp-form').addEventListener('submit', async (e) => {
           e.preventDefault();
           try {
-            const d = await api('/auth/verify-otp', { method: 'POST', body: { phone, otp: $('#otp-code').value.trim() } });
-            toast('অ্যাকাউন্ট ভেরিফায়েড ✓');
-            done(d);
-          } catch (err) { toast(err.message, true); }
-        });
-        $('#otp-resend').addEventListener('click', async (e) => {
-          e.preventDefault();
-          try {
-            const d = await api('/auth/resend-otp', { method: 'POST', body: { phone } });
-            toast(`নতুন কোড গেছে: ${d.email}`);
+            const body = { email, otp: $('#otp-code').value.trim() };
+            let d;
+            if (mode === 'reset') {
+              body.newPassword = $('#otp-newpass').value;
+              d = await api('/auth/reset', { method: 'POST', body });
+              toast('পাসওয়ার্ড বদলে গেছে ✓');
+            } else {
+              d = await api('/auth/verify-otp', { method: 'POST', body });
+              toast('অ্যাকাউন্ট ভেরিফায়েড ✓');
+            }
+            done(d); // টোকেন এসেছে — অটো লগইন + next-এ ফেরত
           } catch (err) { toast(err.message, true); }
         });
       };
@@ -779,9 +833,10 @@
               <button data-t="register" type="button">নতুন অ্যাকাউন্ট</button>
             </div>
             <form id="auth-login" class="form-grid">
-              <div><label>ফোন নম্বর</label><input id="lg-phone" required pattern="(\+8801[3-9][0-9]{8}|01[3-9][0-9]{8})" placeholder="01XXXXXXXXX" inputmode="tel"></div>
-              <div><label>পাসওয়ার্ড</label><input id="lg-pass" type="password" required></div>
+              <div><label>ইমেইল</label><input id="lg-email" type="email" required maxlength="120" placeholder="you@gmail.com" autocomplete="email"></div>
+              <div><label>পাসওয়ার্ড</label><input id="lg-pass" type="password" required autocomplete="current-password"></div>
               <button class="btn btn-primary" type="submit">লগইন করুন</button>
+              <p style="text-align:right;margin-top:-4px"><a href="#" id="lg-forgot" style="font-size:.88rem;color:var(--brand);font-weight:600">পাসওয়ার্ড ভুলে গেছেন?</a></p>
             </form>
             <form id="auth-register" class="form-grid" hidden>
               <div><label>আপনার নাম</label><input id="rg-name" required minlength="2"></div>
@@ -801,16 +856,27 @@
         });
         $('#auth-login').addEventListener('submit', async (e) => {
           e.preventDefault();
-          const phone = $('#lg-phone').value.trim();
+          const email = $('#lg-email').value.trim().toLowerCase();
           try {
-            const d = await api('/auth/login', { method: 'POST', body: { phone, password: $('#lg-pass').value } });
+            const d = await api('/auth/login', { method: 'POST', body: { email, password: $('#lg-pass').value } });
             done(d);
           } catch (err) {
             if (err.data?.needVerify) {
               toast('আগে ইমেইল ভেরিফাই করুন', true);
-              renderOtp(phone, err.data.email);
+              try { await api('/auth/resend-otp', { method: 'POST', body: { email } }); } catch {}
+              renderOtp(email, 'verify');
             } else toast(err.message, true);
           }
+        });
+        $('#lg-forgot').addEventListener('click', async (e) => {
+          e.preventDefault();
+          const email = ($('#lg-email').value.trim() || prompt('আপনার অ্যাকাউন্টের ইমেইল দিন:') || '').toLowerCase();
+          if (!email) return;
+          try {
+            await api('/auth/forgot', { method: 'POST', body: { email } });
+            toast('এই ইমেইলে অ্যাকাউন্ট থাকলে কোড গেছে');
+            renderOtp(email, 'reset');
+          } catch (err) { toast(err.message, true); }
         });
         $('#auth-register').addEventListener('submit', async (e) => {
           e.preventDefault();
@@ -823,9 +889,9 @@
               password: $('#rg-pass').value,
             }});
             toast('কোড পাঠানো হয়েছে — ইমেইল চেক করুন');
-            renderOtp(phone, d.email);
+            renderOtp(d.email, 'verify');
           } catch (err) {
-            if (err.data?.pendingVerify) renderOtp(phone, '');
+            if (err.data?.pendingVerify) renderOtp($('#rg-email').value.trim().toLowerCase(), 'verify');
             toast(err.message, true);
           }
         });
@@ -886,6 +952,7 @@
   };
 
   /* ---------- boot ---------- */
+  console.log('NetBazar client v17');
   document.addEventListener('DOMContentLoaded', async () => {
     // visit beacon — session-প্রতি একবার
     try {

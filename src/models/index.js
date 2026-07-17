@@ -219,6 +219,7 @@ const customerSchema = new Schema(
     otpHash: { type: String, select: false },
     otpExpires: { type: Date, select: false },
     otpTries: { type: Number, default: 0, select: false },
+    otpLastSent: { type: Date, select: false },
     password: { type: String, required: true, select: false },
     address: { type: String, default: '' },
     active: { type: Boolean, default: true },
