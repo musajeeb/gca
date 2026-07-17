@@ -261,6 +261,13 @@
   const pages = {
     /* ----- home ----- */
     async home() {
+      // পুরনো cached index.html-এ ক্যাটাগরি সেকশন থেকে গেলে সেটা DOM থেকেই মুছে দিই —
+      // কোনো ভিজিটরের stale cache-এও "যা খুঁজছেন" আর দেখাবে না
+      const legacy = document.getElementById('home-collections');
+      if (legacy) {
+        const sec = legacy.closest('section');
+        if (sec) sec.remove(); else legacy.remove();
+      }
       $('#home-featured').innerHTML = skelCards(8);
       $('#home-latest').innerHTML = skelCards(8);
       try {
