@@ -51,8 +51,10 @@
         ticking = false;
       });
     }, { passive: true });
-    const btn = document.getElementById('mob-menu');
-    if (btn) btn.addEventListener('click', () => hdr.classList.toggle('menu-open'));
+    // delegation — chrome repaint হলেও কাজ করে
+    hdr.addEventListener('click', (e) => {
+      if (e.target.closest('#mob-menu')) hdr.classList.toggle('menu-open');
+    });
     // মেনু থেকে কোথাও ক্লিক করলে dropdown বন্ধ
     hdr.addEventListener('click', (e) => {
       if (hdr.classList.contains('menu-open') && e.target.closest('a')) hdr.classList.remove('menu-open');
@@ -115,9 +117,9 @@
   };
 
   /* ---------- shared header/footer ---------- */
-  async function renderChrome() {
-    let settings = {};
-    try { settings = await api('/settings'); } catch {}
+  const CHROME_CACHE_KEY = 'nb_chrome_v1';
+
+  function paintChrome(settings, cols) {
     const name = settings.siteName || 'NetBazar';
     document.title = document.title.replace('NetBazar', name);
 
@@ -158,18 +160,44 @@
             ${settings.address ? `<p style="font-size:.9rem;opacity:.85;margin-top:6px">${esc(settings.address)}</p>` : ''}
           </div>
         </div>
-        <div class="footer-bottom"><span>© ${new Date().getFullYear()} ${esc(name)}</span><span style="opacity:.55">client v17</span></div>
+        <div class="footer-bottom"><span>© ${new Date().getFullYear()} ${esc(name)}</span><span style="opacity:.55">client v19</span></div>
       </div>`;
 
-    try {
-      const cols = await api('/collections');
-      $('#nav-collections').insertAdjacentHTML('beforeend',
-        cols.map((c) => `<a href="/c/${esc(c.slug)}">${esc(c.name)}</a>`).join('') +
-        `<a href="/blog.html">ব্লগ</a><a href="/track.html">ট্র্যাক</a>`);
-    } catch {}
+    $('#nav-collections').insertAdjacentHTML('beforeend',
+      (cols || []).map((c) => `<a href="/c/${esc(c.slug)}">${esc(c.name)}</a>`).join('') +
+      `<a href="/blog.html">ব্লগ</a><a href="/track.html">ট্র্যাক</a>`);
     Cart.renderCount();
     window.__settings = settings;
     initLiveSearch();
+  }
+
+  /* header/menu আগে cache থেকে সাথে সাথে আঁকা হয় (layout ভাঙে না, মেনু "পরে আসা" বন্ধ),
+     তারপর background-এ টাটকা ডাটা এনে বদল থাকলে চুপচাপ রিফ্রেশ */
+  async function renderChrome() {
+    let cached = null;
+    try { cached = JSON.parse(localStorage.getItem(CHROME_CACHE_KEY)); } catch {}
+    const fetchFresh = async () => {
+      const [settings, cols] = await Promise.all([
+        api('/settings').catch(() => ({})),
+        api('/collections').catch(() => []),
+      ]);
+      return { settings, cols };
+    };
+    if (cached && cached.settings) {
+      paintChrome(cached.settings, cached.cols);
+      // background refresh — বদল থাকলে repaint
+      fetchFresh().then((fresh) => {
+        const a = JSON.stringify({ s: fresh.settings, c: fresh.cols });
+        const b = JSON.stringify({ s: cached.settings, c: cached.cols });
+        try { localStorage.setItem(CHROME_CACHE_KEY, JSON.stringify(fresh)); } catch {}
+        if (a !== b) paintChrome(fresh.settings, fresh.cols);
+        else window.__settings = fresh.settings;
+      }).catch(() => {});
+      return;
+    }
+    const fresh = await fetchFresh();
+    try { localStorage.setItem(CHROME_CACHE_KEY, JSON.stringify(fresh)); } catch {}
+    paintChrome(fresh.settings, fresh.cols);
   }
 
   /* ---------- live search (typo-tolerant, server-side fuzzy) ---------- */
@@ -378,15 +406,24 @@
             </div>
           </div>
         </div>
-        <div class="section">
-          <div class="tabs" role="tablist">
-            <button class="active" data-tab="desc">বিবরণ</button>
-            ${p.specs?.length ? '<button data-tab="specs">স্পেসিফিকেশন</button>' : ''}
-            ${p.faqs?.length ? '<button data-tab="faq">সচরাচর প্রশ্ন</button>' : ''}
-          </div>
-          <div class="tab-panel active" id="tab-desc">${p.description || '<p>বিবরণ যোগ হয়নি।</p>'}</div>
-          ${p.specs?.length ? `<div class="tab-panel" id="tab-specs"><table class="spec-table">${p.specs.map((s) => `<tr><td>${esc(s.label)}</td><td>${esc(s.value)}</td></tr>`).join('')}</table></div>` : ''}
-          ${p.faqs?.length ? `<div class="tab-panel" id="tab-faq">${p.faqs.map((f) => `<details class="faq-item"><summary>${esc(f.q)}</summary><p>${esc(f.a)}</p></details>`).join('')}</div>` : ''}
+        <div class="section" id="pd-sections">
+          <nav class="pd-tabs" id="pd-tabs" aria-label="প্রোডাক্ট সেকশন">
+            ${p.specs?.length ? '<button data-sec="sec-specs" class="active">স্পেসিফিকেশন</button>' : ''}
+            <button data-sec="sec-desc" ${p.specs?.length ? '' : 'class="active"'}>বিবরণ</button>
+            ${p.faqs?.length ? '<button data-sec="sec-faq">সচরাচর প্রশ্ন</button>' : ''}
+          </nav>
+          ${p.specs?.length ? `<section class="pd-section" id="sec-specs">
+            <h3 class="pd-sec-title">স্পেসিফিকেশন</h3>
+            <div class="spec-grid">${p.specs.map((sp) => `<div class="sk">${esc(sp.label)}</div><div class="sv">${esc(sp.value)}</div>`).join('')}</div>
+          </section>` : ''}
+          <section class="pd-section" id="sec-desc">
+            <h3 class="pd-sec-title">বিবরণ</h3>
+            <div class="pd-desc">${p.description || '<p>বিবরণ যোগ হয়নি।</p>'}</div>
+          </section>
+          ${p.faqs?.length ? `<section class="pd-section" id="sec-faq">
+            <h3 class="pd-sec-title">সচরাচর প্রশ্ন</h3>
+            ${p.faqs.map((f) => `<details class="faq-item"><summary>${esc(f.q)}</summary><p>${esc(f.a)}</p></details>`).join('')}
+          </section>` : ''}
         </div>
         ${p.aplusHtml ? `<div class="section"><div class="section-head"><div><span class="eyebrow">প্রোডাক্ট স্টোরি</span><h2>বিস্তারিত জানুন</h2></div></div><div class="aplus">${p.aplusHtml}</div></div>` : ''}
         <div class="section" id="reviews-section">
@@ -416,13 +453,21 @@
             </details>
           </div>
         </div>
-        ${data.related?.length ? `<div class="section"><div class="section-head"><div><span class="eyebrow">আরো দেখুন</span><h2>সম্পর্কিত প্রোডাক্ট</h2></div></div><div class="product-grid">${data.related.map(productCard).join('')}</div></div>` : ''}`;
+        ${data.related?.length ? `<div class="section"><div class="section-head"><div><span class="eyebrow">আরো দেখুন</span><h2>সম্পর্কিত প্রোডাক্ট</h2></div></div><div class="product-grid">${data.related.map(productCard).join('')}</div></div>` : ''}
+        <div class="sticky-atc" id="sticky-atc">
+          <img src="${esc(imgs[0] || '/img-placeholder.svg')}" alt="">
+          <div class="sa-info"><span class="sa-t">${esc(p.title)}</span><span class="sa-p" id="satc-price"></span></div>
+          <button class="btn btn-primary" id="satc-add">কার্টে যোগ করুন</button>
+        </div>`;
 
       const renderVariant = () => {
         const off = variant.comparePrice > variant.price;
         $('#pd-price').innerHTML = `<span class="price-now">${bd(variant.price)}</span>${off ? `<span class="price-was">${bd(variant.comparePrice)}</span>` : ''}`;
         $('#pd-stock').innerHTML = stockLed([variant]);
         $('#add-to-cart').disabled = $('#buy-now').disabled = variant.stock <= 0;
+        const sp = $('#satc-price'), sb = $('#satc-add');
+        if (sp) sp.textContent = bd(variant.price) + (variant.stock <= 0 ? ' · স্টক নেই' : '');
+        if (sb) sb.disabled = variant.stock <= 0;
         $$('#pd-variants button').forEach((b) => b.classList.toggle('active', b.dataset.vid === variant._id));
       };
       if (p.variants.length > 1) {
@@ -448,12 +493,38 @@
       $('#add-to-cart').addEventListener('click', () => Cart.add(cartItem()));
       $('#buy-now').addEventListener('click', () => { Cart.add(cartItem()); location.href = '/checkout.html'; });
 
-      $('.tabs').addEventListener('click', (e) => {
-        const b = e.target.closest('[data-tab]');
+      /* সেকশন-বার: ক্লিকে স্ক্রল, স্ক্রলে active হাইলাইট, সবসময় sticky (হাইড হয় না) */
+      const tabsBar = $('#pd-tabs');
+      const setTabsTop = () => {
+        const hdr = document.querySelector('.site-header');
+        const t = window.innerWidth <= 768 ? 58 : (hdr ? hdr.offsetHeight : 0);
+        document.documentElement.style.setProperty('--tabs-top', t + 'px');
+      };
+      setTabsTop();
+      window.addEventListener('resize', setTabsTop);
+      tabsBar.addEventListener('click', (e) => {
+        const b = e.target.closest('[data-sec]');
         if (!b) return;
-        $$('.tabs button').forEach((x) => x.classList.toggle('active', x === b));
-        $$('.tab-panel').forEach((x) => x.classList.toggle('active', x.id === 'tab-' + b.dataset.tab));
+        const sec = document.getElementById(b.dataset.sec);
+        if (sec) sec.scrollIntoView({ behavior: 'smooth', block: 'start' });
       });
+      if ('IntersectionObserver' in window) {
+        const spy = new IntersectionObserver((ents) => {
+          for (const en of ents) {
+            if (en.isIntersecting) {
+              tabsBar.querySelectorAll('button').forEach((x) => x.classList.toggle('active', x.dataset.sec === en.target.id));
+            }
+          }
+        }, { rootMargin: '-40% 0px -55% 0px' });
+        $$('.pd-section').forEach((sec) => spy.observe(sec));
+
+        /* মূল add-to-cart ভিউ থেকে উপরে চলে গেলেই নিচে sticky বার */
+        const satc = $('#sticky-atc');
+        new IntersectionObserver(([en]) => {
+          satc.classList.toggle('show', !en.isIntersecting && en.boundingClientRect.bottom < 0);
+        }).observe($('#add-to-cart'));
+      }
+      $('#satc-add').addEventListener('click', () => Cart.add(cartItem()));
       if (imgs.length > 1) $('.pd-thumbs').addEventListener('click', (e) => {
         const b = e.target.closest('[data-i]');
         if (b) { $('#pd-img').src = imgs[+b.dataset.i]; $$('.pd-thumbs button').forEach((x) => x.classList.toggle('active', x === b)); }
@@ -704,6 +775,26 @@
       if (!orderNo || !phone) return denied();
       try {
         const o = await api('/orders/track', { method: 'POST', body: { orderNo, phone } });
+        // LED আইকনের বদলে সেটিংসে আপলোড করা লোগো (না থাকলে দোকানের নাম) — cached পুরনো HTML-ও ঠিক হয়
+        const led = document.querySelector('main .led');
+        if (led) {
+          const lg = window.__settings?.logo;
+          if (lg) {
+            const im = document.createElement('img');
+            im.src = lg; im.alt = window.__settings?.siteName || '';
+            im.style.cssText = 'height:46px;display:block;margin:0 auto;object-fit:contain';
+            led.replaceWith(im);
+          } else {
+            const st = document.createElement('strong');
+            st.textContent = window.__settings?.siteName || '';
+            st.style.cssText = 'font-family:var(--font-display);font-size:1.15rem;display:block;text-align:center';
+            led.replaceWith(st);
+          }
+        }
+        // ট্র্যাক পেজে অটো-ফিলের জন্য শেষ অর্ডার মনে রাখা + বাটনে প্যারাম
+        try { localStorage.setItem('nb_last_order', JSON.stringify({ orderNo, phone })); } catch {}
+        const tl = document.querySelector('main a[href="/track.html"]');
+        if (tl) tl.href = `/track.html?orderNo=${encodeURIComponent(orderNo)}&phone=${encodeURIComponent(phone)}`;
         $('#suc-details').innerHTML = `
           <div class="summary-row"><span>অর্ডার নম্বর</span><strong>${esc(o.orderNo)}</strong></div>
           <div class="summary-row"><span>পেমেন্ট</span><strong>${o.payment.status === 'paid' ? '✅ পেইড' : o.payment.status}${o.payment.trxID ? ` (TrxID: ${esc(o.payment.trxID)})` : ''}</strong></div>
@@ -714,6 +805,14 @@
 
     /* ----- tracking ----- */
     track() {
+      // success পেজ থেকে এলে (URL প্যারাম) বা আগের অর্ডার থাকলে — অটো-ফিল + অটো-সার্চ
+      const q = new URLSearchParams(location.search);
+      let last = null;
+      try { last = JSON.parse(localStorage.getItem('nb_last_order')); } catch {}
+      const preOrder = q.get('orderNo') || last?.orderNo || '';
+      const prePhone = q.get('phone') || last?.phone || '';
+      if (preOrder) $('#t-order').value = preOrder;
+      if (prePhone) $('#t-phone').value = prePhone;
       $('#track-form').addEventListener('submit', async (e) => {
         e.preventDefault();
         try {
@@ -736,6 +835,7 @@
             </div>`;
         } catch (err) { $('#track-result').innerHTML = `<p class="empty-state">${esc(err.message)}</p>`; }
       });
+      if (preOrder && prePhone) $('#track-form').dispatchEvent(new Event('submit', { cancelable: true }));
     },
 
     /* ----- blog list / post / cms page ----- */
@@ -974,7 +1074,7 @@
   };
 
   /* ---------- boot ---------- */
-  console.log('NetBazar client v17');
+  console.log('NetBazar client v19');
   document.addEventListener('DOMContentLoaded', async () => {
     // visit beacon — session-প্রতি একবার
     try {

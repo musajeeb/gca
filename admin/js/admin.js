@@ -535,6 +535,15 @@
     }
     function parseSpecText(text) {
       const pairs = [];
+      const lines = String(text).split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+      // AliExpress স্টাইল অটো-ডিটেক্ট: বেশিরভাগ লাইনে separator নেই = এক লাইনে নাম, পরের লাইনে ভ্যালু
+      const withSep = lines.filter((l) => l.includes(':') || l.includes('\t') || l.includes(',')).length;
+      if (lines.length >= 2 && withSep < lines.length / 2) {
+        for (let i = 0; i + 1 < lines.length; i += 2) {
+          if (lines[i] && lines[i + 1]) pairs.push({ label: lines[i].slice(0, 100), value: lines[i + 1].slice(0, 300) });
+        }
+        return pairs;
+      }
       for (const raw of String(text).split(/\r?\n/)) {
         const line = raw.trim();
         if (!line) continue;
