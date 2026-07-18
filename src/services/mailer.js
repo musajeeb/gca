@@ -10,80 +10,90 @@
 const nodemailer = require('nodemailer');
 const PDFDocument = require('pdfkit');
 
-/** ফুল বিল PDF (ইংরেজি লেআউট — PDF-এ বাংলা ফন্ট এমবেড করা নেই বলে labels English) */
+/** ফুল বিল PDF — লম্বা প্রোডাক্ট নামে wrap হয়, লাইন কখনো টেক্সটের উপর পড়ে না */
 function buildInvoicePdf(order) {
   return new Promise((resolve, reject) => {
-    const doc = new PDFDocument({ size: 'A4', margin: 46 });
+    const doc = new PDFDocument({ size: 'A4', margin: 42 });
     const chunks = [];
     doc.on('data', (c) => chunks.push(c));
     doc.on('end', () => resolve(Buffer.concat(chunks)));
     doc.on('error', reject);
     const Tk = (n) => 'Tk ' + Number(n || 0).toLocaleString('en-US');
+    const L = doc.page.margins.left;
+    const W = doc.page.width - L * 2; // usable width
+    const siteUrl = process.env.SITE_URL && !/localhost/.test(process.env.SITE_URL)
+      ? process.env.SITE_URL : 'https://gca.com.bd';
 
-    doc.fontSize(20).font('Helvetica-Bold').text(process.env.SITE_NAME || 'NetBazar');
-    doc.fontSize(9).font('Helvetica').fillColor('#555')
-      .text('Invoice / Order Receipt', { continued: false });
-    doc.moveDown(0.8);
-    doc.fillColor('#000').fontSize(11).font('Helvetica-Bold').text(`Invoice: ${order.orderNo}`);
+    // ---- header band ----
+    doc.rect(0, 0, doc.page.width, 86).fill('#0e4da4');
+    doc.fill('#ffffff').font('Helvetica-Bold').fontSize(22).text(process.env.SITE_NAME || 'Global Computer Accessories', L, 26);
+    doc.font('Helvetica').fontSize(10).text('Invoice / Order Receipt', L, 54);
+    doc.font('Helvetica-Bold').fontSize(14).text(order.orderNo, L, 26, { width: W, align: 'right' });
+    doc.font('Helvetica').fontSize(9).text(new Date(order.createdAt || Date.now()).toLocaleString('en-GB'), L, 46, { width: W, align: 'right' });
+    doc.fill('#000');
+
+    // ---- customer block ----
+    let y = 104;
+    doc.font('Helvetica-Bold').fontSize(10).text('BILL TO', L, y);
     doc.font('Helvetica').fontSize(10)
-      .text(`Date: ${new Date(order.createdAt || Date.now()).toLocaleString('en-GB')}`)
-      .text(`Customer: ${order.customer.name}`)
-      .text(`Phone: ${order.customer.phone}`)
-      .text(`Address: ${order.customer.address}`)
-      .text(`Payment: ${order.paymentMethod} (${order.payment.status})${order.payment.trxID ? ' TrxID: ' + order.payment.trxID : ''}`);
-    doc.moveDown(0.8);
+      .text(order.customer.name, L, y + 14)
+      .text(order.customer.phone, L, y + 28)
+      .text(order.customer.address, L, y + 42, { width: W * 0.55 });
+    doc.font('Helvetica-Bold').fontSize(10).text('PAYMENT', L + W * 0.62, y);
+    doc.font('Helvetica').fontSize(10)
+      .text(`Method: ${order.paymentMethod}`, L + W * 0.62, y + 14)
+      .text(`Status: ${order.payment.status}`, L + W * 0.62, y + 28)
+      .text(order.payment.trxID ? `TrxID: ${order.payment.trxID}` : '', L + W * 0.62, y + 42);
+    y = Math.max(doc.y, y + 60) + 14;
 
-    // টেবিল
-    const x = doc.page.margins.left, w = doc.page.width - x * 2;
-    const col = { item: x, qty: x + w - 150, price: x + w - 110, total: x + w - 55 };
-    doc.font('Helvetica-Bold').fontSize(9);
-    doc.text('ITEM', col.item, doc.y, { width: col.qty - col.item - 8 });
-    const headY = doc.y - 11;
-    doc.text('QTY', col.qty, headY).text('PRICE', col.price, headY).text('TOTAL', col.total, headY);
-    doc.moveTo(x, doc.y + 3).lineTo(x + w, doc.y + 3).strokeColor('#999').stroke();
-    doc.moveDown(0.5);
-    doc.font('Helvetica').fontSize(9);
+    // ---- items table ----
+    const cQty = L + W - 170, cPrice = L + W - 125, cTotal = L + W - 62;
+    const nameW = cQty - L - 10;
+    doc.rect(L, y, W, 20).fill('#eef2f7');
+    doc.fill('#334').font('Helvetica-Bold').fontSize(9);
+    doc.text('ITEM', L + 6, y + 6, { width: nameW });
+    doc.text('QTY', cQty, y + 6);
+    doc.text('PRICE', cPrice, y + 6);
+    doc.text('TOTAL', cTotal, y + 6);
+    y += 26;
+    doc.fill('#000').font('Helvetica').fontSize(9);
     for (const it of order.items) {
-      const y = doc.y;
-      const nm = `${it.title}${it.variantName && it.variantName !== 'Default' ? ` (${it.variantName})` : ''} [${it.sku}]`;
-      doc.text(nm, col.item, y, { width: col.qty - col.item - 8 });
-      const rowY = y;
-      doc.text(String(it.qty), col.qty, rowY).text(Tk(it.price), col.price, rowY).text(Tk(it.price * it.qty), col.total, rowY);
-      doc.moveDown(0.35);
+      const nm = `${it.title}${it.variantName && it.variantName !== 'Default' ? ` (${it.variantName})` : ''}  [${it.sku}]`;
+      const nameH = doc.heightOfString(nm, { width: nameW }); // নাম কত লাইন নেবে আগে মাপি
+      const rowH = Math.max(nameH, 12) + 8;
+      if (y + rowH > doc.page.height - 160) { doc.addPage(); y = doc.page.margins.top; }
+      doc.text(nm, L + 6, y, { width: nameW });
+      doc.text(String(it.qty), cQty, y);
+      doc.text(Tk(it.price), cPrice, y);
+      doc.text(Tk(it.price * it.qty), cTotal, y);
+      y += rowH;
+      doc.moveTo(L, y - 4).lineTo(L + W, y - 4).strokeColor('#e5eaf1').lineWidth(0.7).stroke(); // লাইন সবসময় টেক্সটের নিচে
     }
-    doc.moveTo(x, doc.y + 2).lineTo(x + w, doc.y + 2).strokeColor('#999').stroke();
-    doc.moveDown(0.5);
-    const right = (label, val, bold) => {
-      doc.font(bold ? 'Helvetica-Bold' : 'Helvetica').fontSize(bold ? 11 : 9);
-      const y = doc.y;
-      doc.text(label, col.price - 60, y, { width: 105, align: 'right' });
-      doc.text(val, col.total, y);
-      doc.moveDown(0.25);
-    };
-    right('Subtotal', Tk(order.subtotal));
-    if (order.discount) right('Discount', '-' + Tk(order.discount));
-    right('Delivery', Tk(order.deliveryFee));
-    right('TOTAL', Tk(order.total), true);
-    if (order.payment.amountPaid) right('Paid', Tk(order.payment.amountPaid));
-    if (order.codDue > 0) right('Due on delivery', Tk(order.codDue), true);
 
-    doc.moveDown(1.2);
-    doc.font('Helvetica').fontSize(8).fillColor('#777')
-      .text(`Track your order: ${process.env.SITE_URL || ''}/track.html  (Order No + Phone)`, x);
+    // ---- totals (ডান পাশে বক্স) ----
+    y += 6;
+    const totW = 220, totX = L + W - totW;
+    const row = (label, val, bold = false, color = '#000') => {
+      doc.font(bold ? 'Helvetica-Bold' : 'Helvetica').fontSize(bold ? 11 : 9).fillColor(color);
+      doc.text(label, totX, y, { width: totW - 80 });
+      doc.text(val, totX + totW - 78, y, { width: 78, align: 'right' });
+      y += bold ? 18 : 14;
+    };
+    row('Subtotal', Tk(order.subtotal));
+    if (order.discount) row('Discount', '-' + Tk(order.discount));
+    row('Delivery', Tk(order.deliveryFee));
+    doc.moveTo(totX, y).lineTo(L + W, y).strokeColor('#334').lineWidth(1).stroke();
+    y += 6;
+    row('TOTAL', Tk(order.total), true);
+    if (order.payment.amountPaid) row('Paid', Tk(order.payment.amountPaid), false, '#17a34a');
+    if (order.codDue > 0) row('Due on delivery', Tk(order.codDue), true, '#b45309');
+
+    // ---- footer ----
+    doc.fillColor('#667').font('Helvetica').fontSize(8.5)
+      .text(`Track your order: ${siteUrl}/track.html  (Order No + Phone)`, L, doc.page.height - 70, { width: W })
+      .text('Thank you for shopping with us!', L, doc.page.height - 56, { width: W });
     doc.end();
   });
-}
-
-let transporter = null;
-function getTransporter() {
-  if (!process.env.SMTP_USER || !process.env.SMTP_APP_PASSWORD) return null;
-  if (!transporter) {
-    transporter = nodemailer.createTransport({
-      service: 'gmail',
-      auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_APP_PASSWORD.replace(/\s/g, '') },
-    });
-  }
-  return transporter;
 }
 
 async function sendMail({ to, subject, html, attachments }) {
@@ -222,4 +232,20 @@ async function sendTestMail() {
   return to;
 }
 
-module.exports = { sendMail, sendTestMail, sendOtpMail, notifyNewOrder, notifyPaid };
+/** অর্ডার স্ট্যাটাস বদলালে কাস্টমারকে (ইমেইল থাকলে) */
+const STATUS_BN = { confirmed: 'কনফার্মড ✅', processing: 'প্রসেসিং শুরু হয়েছে 📦', shipped: 'কুরিয়ারে দেওয়া হয়েছে 🚚', delivered: 'ডেলিভার্ড 🎉', cancelled: 'বাতিল হয়েছে ❌', returned: 'রিটার্ন প্রসেস হয়েছে ↩️' };
+function notifyStatusChange(o, status) {
+  if (!o.customer.email || !STATUS_BN[status]) return;
+  sendMail({
+    to: o.customer.email,
+    subject: `অর্ডার ${o.orderNo}: ${STATUS_BN[status]}`,
+    html: wrap(`আপডেট: ${STATUS_BN[status]}`, `
+      <p>প্রিয় ${esc(o.customer.name)},</p>
+      <p>আপনার অর্ডার <strong>${esc(o.orderNo)}</strong>-এর স্ট্যাটাস এখন: <strong>${STATUS_BN[status]}</strong></p>
+      ${status === 'shipped' && o.courier?.trackingId ? `<p>কুরিয়ার: ${esc(o.courier.name || 'Steadfast')} · ট্র্যাকিং: <strong>${esc(o.courier.trackingId)}</strong></p>` : ''}
+      ${status === 'delivered' && o.codDue > 0 ? `<p>ডেলিভারিতে পরিশোধ: ${bd(o.total)}</p>` : ''}
+      <p>বিস্তারিত: <a href="${process.env.SITE_URL}/track.html">অর্ডার ট্র্যাক করুন</a> (অর্ডার নম্বর + ফোন)</p>`),
+  });
+}
+
+module.exports = { sendMail, sendTestMail, sendOtpMail, notifyNewOrder, notifyPaid, notifyStatusChange };

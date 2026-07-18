@@ -72,7 +72,13 @@
   /* ---------- customer auth store ---------- */
   const Auth = {
     key: 'nb_customer',
-    get() { try { return JSON.parse(localStorage.getItem(this.key)) || null; } catch { return null; } },
+    get() {
+      try {
+        const d = JSON.parse(localStorage.getItem(this.key)) || null;
+        if (d && !d.token) { localStorage.removeItem(this.key); return null; } // করাপ্ট state পরিষ্কার
+        return d;
+      } catch { return null; }
+    },
     set(d) { localStorage.setItem(this.key, JSON.stringify(d)); },
     clear() { localStorage.removeItem(this.key); },
     token() { return this.get()?.token || null; },
@@ -598,9 +604,18 @@
       };
 
       // enabled gateway গুলো দেখাও
-      const gws = (s.gateways && s.gateways.length) ? s.gateways : [{ id: 'bkash', name: 'bKash' }];
+      const gws = s.gateways || [];
       $('#gw-list').innerHTML = gws.map((g, i) => `
         <label class="gw-option"><input type="radio" name="gw" value="${esc(g.id)}" ${i === 0 ? 'checked' : ''}>${esc(g.name)}</label>`).join('');
+      // কোনো gateway চালু না থাকলে "অনলাইনে ফুল পেমেন্ট" অপশনই দেখাবে না — শুধু COD
+      if (!gws.length) {
+        const fullOpt = document.querySelector('input[name="pay"][value="bkash_full"]');
+        if (fullOpt) {
+          fullOpt.closest('label').style.display = 'none';
+          const cod = document.querySelector('input[name="pay"][value="cod_advance"]');
+          if (cod) { cod.checked = true; cod.dispatchEvent(new Event('change', { bubbles: true })); }
+        }
+      }
 
       $('#co-items').innerHTML = items.map((i) => `
         <div class="cart-item">
@@ -971,6 +986,17 @@
     await renderChrome();
     initMobileHeader();
     const page = document.body.dataset.page;
-    if (pages[page]) pages[page]();
+    if (pages[page]) {
+      try { await pages[page](); } catch (e) {
+        console.error('page init error:', e);
+        const mainEl = document.querySelector('main');
+        if (mainEl && !mainEl.innerHTML.trim()) {
+          mainEl.innerHTML = `<div class="card" style="max-width:520px;margin:40px auto;text-align:center;padding:30px">
+            <p style="font-weight:700;margin-bottom:8px">পেজ লোডে সমস্যা হয়েছে</p>
+            <p style="color:var(--ink-soft);font-size:.9rem">${esc(e.message)}</p>
+            <a href="/" class="btn btn-primary" style="margin-top:14px">হোমে ফিরুন</a></div>`;
+        }
+      }
+    }
   });
 })();

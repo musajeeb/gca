@@ -52,6 +52,15 @@
     } catch (e) { toast(e.message, true); }
   }
 
+  function setNavBadge(view, n) {
+    const btn = document.querySelector(`.sidebar nav button[data-view="${view}"]`);
+    if (!btn) return;
+    let b = btn.querySelector('.nav-badge');
+    if (!n) { if (b) b.remove(); return; }
+    if (!b) { b = document.createElement('span'); b.className = 'nav-badge'; btn.appendChild(b); }
+    b.textContent = n > 99 ? '99+' : n;
+  }
+
   const modal = {
     open(html) { $('#modal-body').innerHTML = html; $('#modal').hidden = false; },
     close() { $('#modal').hidden = true; $('#modal-body').innerHTML = ''; },
@@ -160,11 +169,11 @@
       </div>`).join('')}</div>`;
   }
 
-  function salesChart(daily, metric = 'revenue') {
-    if (!daily.length) return '<p style="color:var(--ink-soft)">এই রেঞ্জে কোনো পেইড অর্ডার নেই</p>';
-    // রেঞ্জের প্রথম থেকে শেষ পর্যন্ত প্রতিটা দিন (ফাঁকা দিনসহ), বড় রেঞ্জে সপ্তাহ-ভিত্তিক bucket
-    const map = Object.fromEntries(daily.map((d) => [d._id, d]));
-    const start = new Date(daily[0]._id), end = new Date(daily[daily.length - 1]._id);
+  function salesChart(daily, metric = 'revenue', rangeFrom, rangeTo) {
+    // সিলেক্টেড রেঞ্জের প্রতিটা দিন — ডাটা না থাকলে ০ (৩ দিনের ডাটায় ৯০ দিনের রেঞ্জেও পুরো axis)
+    const map = Object.fromEntries((daily || []).map((d) => [d._id, d]));
+    const start = rangeFrom ? new Date(rangeFrom) : (daily.length ? new Date(daily[0]._id) : new Date());
+    const end = rangeTo ? new Date(rangeTo) : (daily.length ? new Date(daily[daily.length - 1]._id) : new Date());
     let days = [];
     for (let t = start.getTime(); t <= end.getTime(); t += 86400000) {
       const dte = new Date(t), key = dte.toISOString().slice(0, 10);
@@ -195,6 +204,7 @@
       if (from) qs.set('from', from);
       if (to) qs.set('to', to);
       const s = await api('/stats' + (qs.toString() ? '?' + qs : ''));
+      setNavBadge('orders', s.unreadOrders);
       const kpi = (t, r, prev) => `
         <div class="stat"><div class="l">${t} ${prev ? delta(r, prev) : ''}</div><div class="v">${bd(r.revenue)}</div>
           <div class="sub">${r.orders}টা অর্ডার · <span class="profit">লাভ ${bd(r.grossProfit)}</span></div></div>`;
@@ -228,8 +238,8 @@
             <input id="d-to" type="date" value="${to || s.rangeTo}">
             <button class="btn btn-primary btn-sm" id="d-apply">দেখুন</button>
           </div>
-          <h3>সেলস (৳) — ${rangeLabel}</h3>${salesChart(s.daily, 'revenue')}
-          <h3 style="margin-top:18px">অর্ডার সংখ্যা — ${rangeLabel}</h3>${salesChart(s.daily, 'orders')}
+          <h3>সেলস (৳) — ${rangeLabel}</h3>${salesChart(s.daily, 'revenue', s.rangeFrom, s.rangeTo)}
+          <h3 style="margin-top:18px">অর্ডার সংখ্যা — ${rangeLabel}</h3>${salesChart(s.daily, 'orders', s.rangeFrom, s.rangeTo)}
         </div>
 
         <div class="card"><h3>অর্ডার স্ট্যাটাস ডিস্ট্রিবিউশন (সব সময়)</h3>${statusBars(s.statusCounts)}</div>
@@ -285,7 +295,7 @@
         <button class="btn btn-primary" id="new-product">+ নতুন প্রোডাক্ট</button></div>
       <div class="filter-row">
         <input id="p-search" placeholder="সার্চ…">
-        <select id="p-status"><option value="">সব স্ট্যাটাস</option><option value="active">Active</option><option value="draft">Draft</option><option value="archived">Archived</option></select>
+        <select id="p-status"><option value="active" selected>Active (ডিফল্ট)</option><option value="">সব স্ট্যাটাস</option><option value="draft">Draft</option><option value="archived">Archived</option></select>
       </div>
       <div class="bulk-bar" id="p-bulk" hidden>
         <strong><span id="pb-count">0</span>টা সিলেক্টেড</strong>
@@ -414,6 +424,17 @@
         <label style="margin-top:18px">স্পেসিফিকেশন</label>
         <div id="pf-specs"></div>
         <button type="button" class="btn btn-ghost btn-sm" id="add-spec" style="margin-top:8px">+ স্পেক</button>
+        <details style="margin-top:10px">
+          <summary style="cursor:pointer;font-weight:700;color:var(--brand)">📋 একসাথে অনেক স্পেক (পেস্ট বা CSV)</summary>
+          <div style="margin-top:10px">
+            <textarea id="spec-bulk" rows="5" placeholder="প্রতি লাইনে একটা — যেকোনো ফরম্যাট চলবে:&#10;RAM: 6GB&#10;ROM, 200GB&#10;Bluetooth&#9;5.4"></textarea>
+            <div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap">
+              <button type="button" class="btn btn-primary btn-sm" id="spec-bulk-add">যোগ করুন</button>
+              <label class="btn btn-ghost btn-sm" style="cursor:pointer">📄 CSV ফাইল<input type="file" id="spec-csv" accept=".csv,.txt,text/csv,text/plain" hidden></label>
+              <span style="font-size:.8rem;color:var(--ink-soft);align-self:center">Name: Value / Name, Value / CSV — সব সাপোর্টেড; আগের স্পেকের সাথে যোগ হবে</span>
+            </div>
+          </div>
+        </details>
 
         <label style="margin-top:18px">FAQ</label>
         <div id="pf-faqs"></div>
@@ -495,6 +516,70 @@
     });
     $('#add-variant').onclick = () => { state.variants.push({ sku: '', name: '', price: 0, comparePrice: 0, costPrice: 0, stock: 0, lowStockAlert: 3 }); renderVariants(); };
     $('#add-spec').onclick = () => { state.specs.push({ label: '', value: '' }); renderSpecs(); };
+
+    /* বাল্ক স্পেক পার্সার — colon / comma / tab / quoted CSV সব বোঝে */
+    function parseCsvLine(line) {
+      // quoted CSV: Ports,"4x LAN, 1x WAN" — quote-এর ভেতরের কমা ভাঙে না
+      const out = [];
+      let cur = '', inQ = false;
+      for (let i = 0; i < line.length; i++) {
+        const ch = line[i];
+        if (ch === '"') {
+          if (inQ && line[i + 1] === '"') { cur += '"'; i++; }
+          else inQ = !inQ;
+        } else if (ch === ',' && !inQ) { out.push(cur); cur = ''; }
+        else cur += ch;
+      }
+      out.push(cur);
+      return out;
+    }
+    function parseSpecText(text) {
+      const pairs = [];
+      for (const raw of String(text).split(/\r?\n/)) {
+        const line = raw.trim();
+        if (!line) continue;
+        let label = '', value = '';
+        if (line.includes(':')) { // Name: Value (value-তে আরো : থাকলেও ঠিক থাকে)
+          const i = line.indexOf(':');
+          label = line.slice(0, i).trim();
+          value = line.slice(i + 1).trim();
+        } else if (line.includes('\t')) { // supplier টেবিল থেকে কপি = tab-আলাদা
+          const i = line.indexOf('\t');
+          label = line.slice(0, i).trim();
+          value = line.slice(i + 1).trim();
+        } else if (line.includes(',')) { // CSV
+          const cells = parseCsvLine(line);
+          label = (cells[0] || '').trim();
+          value = cells.slice(1).join(', ').trim();
+        } else continue;
+        if (!label || !value) continue;
+        if (/^(name|field|label|নাম|ফিল্ড)$/i.test(label) && /^(value|val|মান|ভ্যালু)$/i.test(value)) continue; // হেডার সারি বাদ
+        pairs.push({ label: label.slice(0, 100), value: value.slice(0, 300) });
+      }
+      return pairs;
+    }
+    function addBulkSpecs(text) {
+      const pairs = parseSpecText(text);
+      if (!pairs.length) return toast('কিছু পাওয়া যায়নি — প্রতি লাইনে Name: Value বা Name, Value দিন', true);
+      // ফাঁকা রো ফেলে দিয়ে নতুনগুলো যোগ (একই নামেরটা replace)
+      state.specs = state.specs.filter((x) => x.label || x.value);
+      for (const pr of pairs) {
+        const ex = state.specs.find((x) => x.label.toLowerCase() === pr.label.toLowerCase());
+        if (ex) ex.value = pr.value; else state.specs.push(pr);
+      }
+      renderSpecs();
+      toast(`✓ ${pairs.length}টা স্পেক যোগ/আপডেট হয়েছে`);
+      $('#spec-bulk').value = '';
+    }
+    $('#spec-bulk-add').onclick = () => addBulkSpecs($('#spec-bulk').value);
+    $('#spec-csv').onchange = (e) => {
+      const f = e.target.files[0];
+      if (!f) return;
+      const rd = new FileReader();
+      rd.onload = () => addBulkSpecs(rd.result);
+      rd.readAsText(f, 'UTF-8');
+      e.target.value = '';
+    };
     $('#add-faq').onclick = () => { state.faqs.push({ q: '', a: '' }); renderFaqs(); };
 
     /* image upload */
@@ -649,11 +734,12 @@
       try {
         const data = await api('/orders?' + qs);
         renderTabs(data.counts);
+        setNavBadge('orders', data.unread);
         $('#o-table').innerHTML = `<table>
           <tr><th style="width:34px"><input type="checkbox" id="o-check-all" title="সব সিলেক্ট"></th><th>অর্ডার</th><th>কাস্টমার</th><th>মোট</th><th>পেমেন্ট</th><th>বাকি (COD)</th><th>স্ট্যাটাস</th><th>সময়</th><th></th></tr>
           ${data.items.map((o) => `<tr>
             <td><input type="checkbox" class="o-check" data-id="${o._id}"></td>
-            <td><strong>${esc(o.orderNo)}</strong>${o.source === 'admin' ? '<br><small style="color:var(--brand)">🖊️ ম্যানুয়াল</small>' : ''}${o.adminNote ? ' 📝' : ''}</td>
+            <td>${!o.seenByAdmin ? '<span class="unread-dot" title="নতুন — এখনো দেখা হয়নি"></span>' : ''}<strong>${esc(o.orderNo)}</strong>${o.source === 'admin' ? '<br><small style="color:var(--brand)">🖊️ ম্যানুয়াল</small>' : ''}${o.adminNote ? ' 📝' : ''}</td>
             <td>${esc(o.customer.name)}<br><small>${esc(o.customer.phone)}</small>${(o.tags || []).length ? `<br><small style="color:#6d28d9">🏷️ ${o.tags.map(esc).join(', ')}</small>` : ''}</td>
             <td>${bd(o.total)}</td>
             <td><span class="status-badge st-${esc(o.payment.status)}">${esc(o.payment.status)}</span></td>
@@ -684,7 +770,18 @@
         load();
       } catch (e) { toast(e.message, true); }
     };
-    $('#ob-status-apply').onclick = () => bulk({ action: 'status', status: $('#ob-status').value });
+    $('#ob-status-apply').onclick = async () => {
+      const st = $('#ob-status').value;
+      const ids = [...selected];
+      await bulk({ action: 'status', status: st });
+      if (st === 'delivered' && ids.length && await confirmBox(`${ids.length}টা অর্ডার ডেলিভার্ড — সবগুলোর পেমেন্টও paid মার্ক করবেন?`)) {
+        try {
+          const r = await api('/orders/bulk', { method: 'POST', body: { ids, action: 'payment', paymentStatus: 'paid' } });
+          toast(`✓ ${r.done}টা paid হয়েছে`);
+          load();
+        } catch (e) { toast(e.message, true); }
+      }
+    };
     $('#ob-pay-apply').onclick = () => bulk({ action: 'payment', paymentStatus: $('#ob-pay').value });
     $('#ob-steadfast').onclick = async () => {
       if (!await confirmBox(`${selected.size}টা অর্ডার Steadfast-এ বাল্ক বুক হবে (আগেই বুকড/বাতিল/ডেলিভার্ডগুলো বাদ যাবে)। নিশ্চিত?`)) return;
@@ -997,11 +1094,19 @@
     $('#od-close').onclick = modal.close;
     $('#od-save').onclick = async () => {
       try {
+        const newStatus = $('#od-status').value;
         await api(`/orders/${o._id}/status`, { method: 'PUT', body: {
-          status: $('#od-status').value, note: $('#od-note').value.trim(),
+          status: newStatus, note: $('#od-note').value.trim(),
           courierName: $('#od-courier').value.trim() || undefined,
           trackingId: $('#od-tracking').value.trim() || undefined,
         }});
+        // Shopify-স্টাইল: delivered = টাকাও বুঝে পাওয়া — paid মার্কের প্রস্তাব
+        if (newStatus === 'delivered' && o.payment.status !== 'paid') {
+          if (await confirmBox(`অর্ডার ডেলিভার্ড ✓ — পেমেন্ট স্ট্যাটাসও paid মার্ক করবেন? (মোট ${bd(o.total)})`)) {
+            await api(`/orders/${o._id}/payment`, { method: 'PUT', body: { status: 'paid', amountPaid: o.total, note: 'ডেলিভারিতে সম্পূর্ণ টাকা কালেক্টেড' } });
+            toast('পেমেন্ট paid হয়েছে ✓');
+          }
+        }
         toast('আপডেট হয়েছে ✓'); modal.close(); refresh();
       } catch (e) { toast(e.message, true); }
     };
@@ -1194,8 +1299,67 @@
   views.customers = async () => {
     main().innerHTML = `<div class="page-head"><h1 class="page-title">কাস্টমার</h1>
       <button class="btn btn-ghost" id="cu-export">⬇️ CSV এক্সপোর্ট</button></div>
+
+      <div class="card">
+        <h3>👤 রেজিস্টার্ড অ্যাকাউন্ট</h3>
+        <div class="filter-row" style="margin:10px 0"><input id="ac-search" placeholder="নাম / ফোন / ইমেইল…"></div>
+        <div class="table-wrap" id="ac-table">লোড হচ্ছে…</div><div class="pager" id="ac-pager"></div>
+      </div>
+
+      <h3 style="margin:18px 0 10px">🛒 অর্ডার-ভিত্তিক কাস্টমার (গেস্টসহ)</h3>
       <div class="filter-row"><input id="cu-search" placeholder="নাম বা ফোন…"></div>
       <div class="card"><div class="table-wrap" id="cu-table">লোড হচ্ছে…</div><div class="pager" id="cu-pager"></div></div>`;
+
+    /* ---- রেজিস্টার্ড অ্যাকাউন্ট: ban/unban/delete ---- */
+    const loadAcc = async (pg = 1) => {
+      const qs = new URLSearchParams({ page: pg });
+      if ($('#ac-search').value.trim()) qs.set('q', $('#ac-search').value.trim());
+      try {
+        const data = await api('/accounts?' + qs);
+        $('#ac-table').innerHTML = `<table>
+          <tr><th>নাম</th><th>ফোন</th><th>ইমেইল</th><th>অর্ডার</th><th>মোট কেনা</th><th>স্ট্যাটাস</th><th></th></tr>
+          ${data.items.map((c) => `<tr>
+            <td><strong>${esc(c.name)}</strong><br><small>${dt(c.createdAt)}</small></td>
+            <td>${esc(c.phone)}</td>
+            <td>${esc(c.email || '—')} ${c.emailVerified ? '<span title="ভেরিফায়েড">✅</span>' : '<span title="ভেরিফাই হয়নি">⏳</span>'}</td>
+            <td>${c.orders}</td>
+            <td>${bd(c.spent)}</td>
+            <td>${c.active ? '<span class="status-badge st-active">সক্রিয়</span>' : '<span class="status-badge st-cancelled">ব্যান</span>'}</td>
+            <td style="white-space:nowrap">
+              <button class="btn btn-sm ${c.active ? 'btn-danger' : 'btn-primary'}" data-ban="${c._id}" data-active="${c.active}">${c.active ? '🚫 ব্যান' : '✅ আনব্যান'}</button>
+              <button class="btn btn-ghost btn-sm" data-acdel="${c._id}">🗑️</button>
+            </td>
+          </tr>`).join('') || '<tr><td colspan="7">কোনো রেজিস্টার্ড অ্যাকাউন্ট নেই</td></tr>'}</table>`;
+        $('#ac-pager').innerHTML = data.pages > 1 ? Array.from({ length: data.pages }, (_, i) =>
+          `<button class="btn btn-sm ${i + 1 === data.page ? 'btn-primary' : 'btn-ghost'}" data-acpg="${i + 1}">${i + 1}</button>`).join('') : '';
+        $('#ac-table').onclick = async (e) => {
+          const ban = e.target.closest('[data-ban]');
+          if (ban) {
+            const makeActive = ban.dataset.active !== 'true';
+            if (!makeActive && !await confirmBox('অ্যাকাউন্টটা ব্যান হবে — লগইন ও নতুন অর্ডার দুটোই বন্ধ। নিশ্চিত?')) return;
+            try {
+              await api(`/accounts/${ban.dataset.ban}/status`, { method: 'PUT', body: { active: makeActive } });
+              toast(makeActive ? 'আনব্যান হয়েছে ✓' : 'ব্যান হয়েছে ✓');
+              loadAcc(pg);
+            } catch (err) { toast(err.message, true); }
+            return;
+          }
+          const del = e.target.closest('[data-acdel]');
+          if (del) {
+            if (!await confirmBox('অ্যাকাউন্টটা স্থায়ীভাবে মুছে যাবে (অর্ডার হিস্টোরি থাকবে)। নিশ্চিত?')) return;
+            try {
+              await api('/accounts/' + del.dataset.acdel, { method: 'DELETE' });
+              toast('অ্যাকাউন্ট মুছে গেছে');
+              loadAcc(pg);
+            } catch (err) { toast(err.message, true); }
+          }
+        };
+        $('#ac-pager').onclick = (e) => { const b = e.target.closest('[data-acpg]'); if (b) loadAcc(+b.dataset.acpg); };
+      } catch (e) { toast(e.message, true); }
+    };
+    let acT;
+    $('#ac-search').oninput = () => { clearTimeout(acT); acT = setTimeout(() => loadAcc(1), 400); };
+    loadAcc(1);
     const load = async (pg = 1) => {
       const qs = new URLSearchParams({ page: pg });
       if ($('#cu-search').value.trim()) qs.set('q', $('#cu-search').value.trim());

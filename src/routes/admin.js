@@ -6,7 +6,7 @@ const mongoose = require('mongoose');
 const { Admin, Product, Collection, Order, Coupon, Blog, Page, Review, Stat, Image, Settings, nextSeq } = require('../models');
 const { requireAdmin, signToken, validate, sanitizeHtml, upload, makeImageName, sniffImage, loginLimiter, PHONE_RE, ADDRESS_RE, normalizePhone } = require('../middleware');
 const { invalidate: invalidateSearch } = require('../services/search');
-const { notifyPaid, sendTestMail } = require('../services/mailer');
+const { notifyPaid, sendTestMail, notifyStatusChange } = require('../services/mailer');
 
 const oid = (s) => mongoose.isValidObjectId(s);
 const makeSlug = (s) => slugify(String(s), { lower: true, strict: true }) || `item-${Date.now()}`;
@@ -165,6 +165,7 @@ router.get('/stats', async (req, res, next) => {
       daily, topProducts,
       statusCounts: Object.fromEntries(statusCounts.map((s) => [s._id, s.n])),
       paymentSplit, lowStock, totalProducts, recentOrders,
+      unreadOrders: await Order.countDocuments({ seenByAdmin: false }),
     });
   } catch (e) { next(e); }
 });
@@ -362,14 +363,16 @@ router.get('/orders', async (req, res, next) => {
       ];
     }
     const perPage = 30, pg = Math.max(Number(page) || 1, 1);
-    const [items, total, counts] = await Promise.all([
+    const [items, total, counts, unread] = await Promise.all([
       Order.find(filter).sort({ createdAt: -1 }).skip((pg - 1) * perPage).limit(perPage).lean(),
       Order.countDocuments(filter),
       Order.aggregate([{ $group: { _id: '$status', n: { $sum: 1 } } }]),
+      Order.countDocuments({ seenByAdmin: false }),
     ]);
     res.json({
       items, total, pages: Math.ceil(total / perPage),
       counts: Object.fromEntries(counts.map((c) => [c._id, c.n])),
+      unread,
     });
   } catch (e) { next(e); }
 });
@@ -406,6 +409,7 @@ router.get('/orders/export', async (req, res, next) => {
 
 
 router.get('/orders/:id', async (req, res, next) => {
+  if (oid(req.params.id)) Order.updateOne({ _id: req.params.id, seenByAdmin: false }, { seenByAdmin: true }).catch(() => {});
   try {
     if (!oid(req.params.id)) return res.status(400).json({ error: 'invalid id' });
     const o = await Order.findById(req.params.id).lean();
@@ -443,6 +447,7 @@ router.put('/orders/:id/status', validate(z.object({
     o.status = status;
     o.statusHistory.push({ status, note });
     await o.save();
+    notifyStatusChange(o, status);
     res.json(o);
   } catch (e) { next(e); }
 });
@@ -680,6 +685,7 @@ router.post('/orders/bulk', validate(z.object({
           o.status = status;
           o.statusHistory.push({ status, note: note || 'বাল্ক আপডেট' });
           await o.save();
+          notifyStatusChange(o, status);
         } else if (action === 'payment') {
           o.payment.status = paymentStatus;
           if (paymentStatus === 'paid') {
@@ -931,6 +937,52 @@ router.put('/gateways', validate(z.object({
   } catch (e) { next(e); }
 });
 
+/* ================= CUSTOMER ACCOUNTS (রেজিস্টার্ড) ================= */
+const { Customer } = require('../models');
+
+router.get('/accounts', async (req, res, next) => {
+  try {
+    const page = Math.max(1, parseInt(req.query.page) || 1);
+    const limit = 30;
+    const filter = {};
+    if (req.query.q) {
+      const safe = String(req.query.q).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      filter.$or = [{ name: new RegExp(safe, 'i') }, { phone: new RegExp(safe) }, { email: new RegExp(safe, 'i') }];
+    }
+    const [items, total] = await Promise.all([
+      Customer.find(filter).sort({ createdAt: -1 }).skip((page - 1) * limit).limit(limit).lean(),
+      Customer.countDocuments(filter),
+    ]);
+    const phones = items.map((c) => c.phone);
+    const stats = await Order.aggregate([
+      { $match: { 'customer.phone': { $in: phones } } },
+      { $group: { _id: '$customer.phone', orders: { $sum: 1 }, spent: { $sum: { $cond: [{ $eq: ['$payment.status', 'paid'] }, '$total', 0] } } } },
+    ]);
+    const map = Object.fromEntries(stats.map((x) => [x._id, x]));
+    res.json({
+      items: items.map((c) => ({ ...c, orders: map[c.phone]?.orders || 0, spent: map[c.phone]?.spent || 0 })),
+      total, page, pages: Math.ceil(total / limit),
+    });
+  } catch (e) { next(e); }
+});
+
+router.put('/accounts/:id/status', validate(z.object({ active: z.boolean() })), async (req, res, next) => {
+  try {
+    if (!oid(req.params.id)) return res.status(400).json({ error: 'invalid id' });
+    const c = await Customer.findByIdAndUpdate(req.params.id, { active: req.body.active }, { new: true });
+    if (!c) return res.status(404).json({ error: 'পাওয়া যায়নি' });
+    res.json({ ok: true, active: c.active });
+  } catch (e) { next(e); }
+});
+
+router.delete('/accounts/:id', async (req, res, next) => {
+  try {
+    if (!oid(req.params.id)) return res.status(400).json({ error: 'invalid id' });
+    await Customer.deleteOne({ _id: req.params.id });
+    res.json({ ok: true });
+  } catch (e) { next(e); }
+});
+
 /* ================= COURIER (Steadfast) ================= */
 const steadfast = require('../services/steadfast');
 
@@ -979,6 +1031,7 @@ router.post('/orders/:id/ship-steadfast', async (req, res, next) => {
     o.status = 'shipped';
     o.statusHistory.push({ status: 'shipped', note: `Steadfast-এ বুক হয়েছে — ট্র্যাকিং ${r.trackingCode}, COD ৳${o.codDue}` });
     await o.save();
+    notifyStatusChange(o, 'shipped');
     res.json(o);
   } catch (e) { next(e); }
 });
@@ -1023,6 +1076,7 @@ router.post('/orders/:id/sync-courier', async (req, res, next) => {
       o.status = 'delivered';
       if (o.paymentMethod === 'cod_advance') o.payment.amountPaid = o.total;
       o.statusHistory.push({ status: 'delivered', note: 'Steadfast sync: ডেলিভার্ড' });
+      notifyStatusChange(o, 'delivered');
     } else if (st === 'cancelled' && !['cancelled', 'returned'].includes(o.status)) {
       o.statusHistory.push({ status: o.status, note: 'Steadfast sync: কুরিয়ার বাতিল করেছে — রিটার্ন হ্যান্ডেল করুন' });
     } else {

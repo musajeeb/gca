@@ -191,6 +191,8 @@ const checkoutSchema = z.object({
 
 router.post('/checkout', checkoutLimiter, requireCustomer, validate(checkoutSchema), async (req, res, next) => {
   try {
+    const acct = await Customer.findById(req.customer.id).select('active').lean();
+    if (!acct || !acct.active) return res.status(403).json({ error: 'অ্যাকাউন্টটি সক্রিয় নেই — আমাদের সাথে যোগাযোগ করুন' });
     if (req.body.website) return res.status(400).json({ error: 'Invalid request' });
     const { items, customer, paymentMethod, couponCode } = req.body;
 

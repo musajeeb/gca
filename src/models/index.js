@@ -159,6 +159,7 @@ const orderSchema = new Schema(
     adminNote: { type: String, default: '', maxlength: 2000 }, // শুধু অ্যাডমিন দেখে
     tags: [{ type: String, index: true }],
     source: { type: String, enum: ['online', 'admin'], default: 'online' },
+    seenByAdmin: { type: Boolean, default: false, index: true },
     stockReduced: { type: Boolean, default: false },
   },
   { timestamps: true }
