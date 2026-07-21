@@ -52,15 +52,6 @@
     } catch (e) { toast(e.message, true); }
   }
 
-  function setNavBadge(view, n) {
-    const btn = document.querySelector(`.sidebar nav button[data-view="${view}"]`);
-    if (!btn) return;
-    let b = btn.querySelector('.nav-badge');
-    if (!n) { if (b) b.remove(); return; }
-    if (!b) { b = document.createElement('span'); b.className = 'nav-badge'; btn.appendChild(b); }
-    b.textContent = n > 99 ? '99+' : n;
-  }
-
   const modal = {
     open(html) { $('#modal-body').innerHTML = html; $('#modal').hidden = false; },
     close() { $('#modal').hidden = true; $('#modal-body').innerHTML = ''; },
@@ -204,7 +195,6 @@
       if (from) qs.set('from', from);
       if (to) qs.set('to', to);
       const s = await api('/stats' + (qs.toString() ? '?' + qs : ''));
-      setNavBadge('orders', s.unreadOrders);
       const kpi = (t, r, prev) => `
         <div class="stat"><div class="l">${t} ${prev ? delta(r, prev) : ''}</div><div class="v">${bd(r.revenue)}</div>
           <div class="sub">${r.orders}টা অর্ডার · <span class="profit">লাভ ${bd(r.grossProfit)}</span></div></div>`;
@@ -695,13 +685,11 @@
       <div class="bulk-bar" id="o-bulk" hidden>
         <strong><span id="ob-count">0</span>টা সিলেক্টেড</strong>
         <span class="sep"></span>
-        <label>অর্ডার স্ট্যাটাস:</label>
-        <select id="ob-status">${['confirmed', 'processing', 'shipped', 'delivered', 'cancelled', 'returned'].map((st) => `<option value="${st}">${({ confirmed: 'কনফার্মড', processing: 'প্রসেসিং', shipped: 'কুরিয়ারে', delivered: 'ডেলিভার্ড', cancelled: 'বাতিল', returned: 'রিটার্নড' })[st]}</option>`).join('')}</select>
-        <button class="btn btn-primary btn-sm" id="ob-status-apply">প্রয়োগ</button>
-        <span class="sep"></span>
+        <label>স্ট্যাটাস:</label>
+        <select id="ob-status"><option value="">— বদলাবে না —</option>${['confirmed', 'processing', 'shipped', 'delivered', 'cancelled', 'returned'].map((st) => `<option value="${st}">${({ confirmed: 'কনফার্মড', processing: 'প্রসেসিং', shipped: 'কুরিয়ারে', delivered: 'ডেলিভার্ড', cancelled: 'বাতিল', returned: 'রিটার্নড' })[st]}</option>`).join('')}</select>
         <label>পেমেন্ট:</label>
-        <select id="ob-pay"><option value="paid">paid</option><option value="pending">pending</option><option value="failed">failed</option><option value="refunded">refunded</option></select>
-        <button class="btn btn-primary btn-sm" id="ob-pay-apply">প্রয়োগ</button>
+        <select id="ob-pay"><option value="">— বদলাবে না —</option><option value="paid">paid</option><option value="pending">pending</option><option value="failed">failed</option><option value="refunded">refunded</option></select>
+        <button class="btn btn-primary btn-sm" id="ob-apply">প্রয়োগ</button>
         <span class="sep"></span>
         <button class="btn btn-sm" id="ob-steadfast" style="background:#f5a623;color:#0b1b2b;font-weight:700">📦 Steadfast</button>
         <span class="sep"></span>
@@ -743,12 +731,11 @@
       try {
         const data = await api('/orders?' + qs);
         renderTabs(data.counts);
-        setNavBadge('orders', data.unread);
         $('#o-table').innerHTML = `<table>
           <tr><th style="width:34px"><input type="checkbox" id="o-check-all" title="সব সিলেক্ট"></th><th>অর্ডার</th><th>কাস্টমার</th><th>মোট</th><th>পেমেন্ট</th><th>বাকি (COD)</th><th>স্ট্যাটাস</th><th>সময়</th><th></th></tr>
           ${data.items.map((o) => `<tr>
             <td><input type="checkbox" class="o-check" data-id="${o._id}"></td>
-            <td>${!o.seenByAdmin ? '<span class="unread-dot" title="নতুন — এখনো দেখা হয়নি"></span>' : ''}<strong>${esc(o.orderNo)}</strong>${o.source === 'admin' ? '<br><small style="color:var(--brand)">🖊️ ম্যানুয়াল</small>' : ''}${o.adminNote ? ' 📝' : ''}</td>
+            <td><strong>${esc(o.orderNo)}</strong>${o.source === 'admin' ? '<br><small style="color:var(--brand)">🖊️ ম্যানুয়াল</small>' : ''}${o.adminNote ? ' 📝' : ''}</td>
             <td>${esc(o.customer.name)}<br><small>${esc(o.customer.phone)}</small>${(o.tags || []).length ? `<br><small style="color:#6d28d9">🏷️ ${o.tags.map(esc).join(', ')}</small>` : ''}</td>
             <td>${bd(o.total)}</td>
             <td><span class="status-badge st-${esc(o.payment.status)}">${esc(o.payment.status)}</span></td>
@@ -779,11 +766,18 @@
         load();
       } catch (e) { toast(e.message, true); }
     };
-    $('#ob-status-apply').onclick = async () => {
-      const st = $('#ob-status').value;
+    $('#ob-apply').onclick = async () => {
+      const st = $('#ob-status').value, pay = $('#ob-pay').value;
+      if (!st && !pay) return toast('স্ট্যাটাস বা পেমেন্ট — অন্তত একটা বাছুন', true);
       const ids = [...selected];
-      await bulk({ action: 'status', status: st });
-      if (st === 'delivered' && ids.length && await confirmBox(`${ids.length}টা অর্ডার ডেলিভার্ড — সবগুলোর পেমেন্টও paid মার্ক করবেন?`)) {
+      if (st) await bulk({ action: 'status', status: st });
+      if (pay) {
+        try {
+          const r = await api('/orders/bulk', { method: 'POST', body: { ids, action: 'payment', paymentStatus: pay } });
+          toast(`✓ পেমেন্ট আপডেট: ${r.done}টা`);
+          load();
+        } catch (e) { toast(e.message, true); }
+      } else if (st === 'delivered' && ids.length && await confirmBox(`${ids.length}টা অর্ডার ডেলিভার্ড — সবগুলোর পেমেন্টও paid মার্ক করবেন?`)) {
         try {
           const r = await api('/orders/bulk', { method: 'POST', body: { ids, action: 'payment', paymentStatus: 'paid' } });
           toast(`✓ ${r.done}টা paid হয়েছে`);
@@ -791,7 +785,6 @@
         } catch (e) { toast(e.message, true); }
       }
     };
-    $('#ob-pay-apply').onclick = () => bulk({ action: 'payment', paymentStatus: $('#ob-pay').value });
     $('#ob-steadfast').onclick = async () => {
       if (!await confirmBox(`${selected.size}টা অর্ডার Steadfast-এ বাল্ক বুক হবে (আগেই বুকড/বাতিল/ডেলিভার্ডগুলো বাদ যাবে)। নিশ্চিত?`)) return;
       try {

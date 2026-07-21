@@ -10,8 +10,35 @@
 const nodemailer = require('nodemailer');
 const PDFDocument = require('pdfkit');
 
+/* ---- ব্র্যান্ড: Settings থেকে নাম+লোগো (৫ মিনিট cache) — hardcode নাম আর কোথাও না ---- */
+let _brandName = process.env.SITE_NAME || 'Global Computer Accessories';
+let _brand = { t: 0, v: null };
+async function getBrand() {
+  if (_brand.v && Date.now() - _brand.t < 5 * 60 * 1000) return _brand.v;
+  const out = {
+    name: process.env.SITE_NAME || 'Global Computer Accessories',
+    siteUrl: (process.env.SITE_URL && !/localhost/.test(process.env.SITE_URL)) ? process.env.SITE_URL : 'https://gca.com.bd',
+    logoBuf: null,
+  };
+  try {
+    const { Settings, Image } = require('../models');
+    const st = await Settings.findOne().lean();
+    if (st?.siteName) out.name = st.siteName;
+    if (st?.logo && /^\/uploads\//.test(st.logo)) {
+      const img = await Image.findOne({ name: st.logo.replace('/uploads/', '') }).lean();
+      // pdfkit শুধু PNG/JPEG এমবেড করতে পারে — webp হলে নাম/ডোমেইনে fallback
+      if (img && /image\/(png|jpe?g)/i.test(img.mime || '')) {
+        out.logoBuf = Buffer.isBuffer(img.data) ? img.data : Buffer.from(img.data?.buffer || img.data);
+      }
+    }
+  } catch {}
+  _brandName = out.name;
+  _brand = { t: Date.now(), v: out };
+  return out;
+}
+
 /** ফুল বিল PDF — লম্বা প্রোডাক্ট নামে wrap হয়, লাইন কখনো টেক্সটের উপর পড়ে না */
-function buildInvoicePdf(order) {
+function buildInvoicePdf(order, brand = {}) {
   return new Promise((resolve, reject) => {
     const doc = new PDFDocument({ size: 'A4', margin: 42 });
     const chunks = [];
@@ -21,15 +48,26 @@ function buildInvoicePdf(order) {
     const Tk = (n) => 'Tk ' + Number(n || 0).toLocaleString('en-US');
     const L = doc.page.margins.left;
     const W = doc.page.width - L * 2; // usable width
-    const siteUrl = process.env.SITE_URL && !/localhost/.test(process.env.SITE_URL)
-      ? process.env.SITE_URL : 'https://gca.com.bd';
+    const siteUrl = brand.siteUrl || ((process.env.SITE_URL && !/localhost/.test(process.env.SITE_URL)) ? process.env.SITE_URL : 'https://gca.com.bd');
+    const domain = siteUrl.replace(/^https?:\/\//, '');
+    // PDF-এ বাংলা ফন্ট এমবেড নেই — নাম বাংলায় হলে ডোমেইন দেখানো নিরাপদ
+    const brandText = brand.name && !/[\u0980-\u09FF]/.test(brand.name) ? brand.name : domain;
 
-    // ---- header band ----
+    // ---- header band: আপলোড করা লোগো (png/jpg) থাকলে সেটাই, নাহলে নাম ----
     doc.rect(0, 0, doc.page.width, 86).fill('#0e4da4');
-    doc.fill('#ffffff').font('Helvetica-Bold').fontSize(22).text(process.env.SITE_NAME || 'Global Computer Accessories', L, 26);
-    doc.font('Helvetica').fontSize(10).text('Invoice / Order Receipt', L, 54);
-    doc.font('Helvetica-Bold').fontSize(14).text(order.orderNo, L, 26, { width: W, align: 'right' });
-    doc.font('Helvetica').fontSize(9).text(new Date(order.createdAt || Date.now()).toLocaleString('en-GB'), L, 46, { width: W, align: 'right' });
+    let logoDrawn = false;
+    if (brand.logoBuf) {
+      try {
+        doc.image(brand.logoBuf, L, 16, { fit: [200, 48] });
+        logoDrawn = true;
+      } catch {}
+    }
+    if (!logoDrawn) doc.fill('#ffffff').font('Helvetica-Bold').fontSize(22).text(brandText, L, 26);
+    doc.fill('#ffffff').font('Helvetica').fontSize(10).text('Invoice / Order Receipt', L, logoDrawn ? 68 : 54);
+    doc.font('Helvetica-Bold').fontSize(14).text(order.orderNo, L, 22, { width: W, align: 'right' });
+    doc.font('Helvetica').fontSize(9)
+      .text(new Date(order.createdAt || Date.now()).toLocaleString('en-GB'), L, 42, { width: W, align: 'right' })
+      .text(domain, L, 56, { width: W, align: 'right' });
     doc.fill('#000');
 
     // ---- customer block ----
@@ -101,7 +139,7 @@ async function sendMail({ to, subject, html, attachments }) {
   if (!t || !to) return false;
   try {
     await t.sendMail({
-      from: `"${process.env.SITE_NAME || 'NetBazar'}" <${process.env.SMTP_USER}>`,
+      from: `"${_brandName}" <${process.env.SMTP_USER}>`,
       to, subject, html, attachments,
     });
     return true;
@@ -133,7 +171,7 @@ function orderTable(o) {
 
 function wrap(title, inner) {
   return `<div style="font-family:sans-serif;max-width:560px;margin:auto;border:1px solid #dde5ee;border-radius:12px;overflow:hidden">
-    <div style="background:#0e4da4;color:#fff;padding:16px 22px;font-size:18px;font-weight:bold">${esc(process.env.SITE_NAME || 'NetBazar')}</div>
+    <div style="background:#0e4da4;color:#fff;padding:16px 22px;font-size:18px;font-weight:bold">${esc(_brandName)}</div>
     <div style="padding:22px"><h2 style="margin:0 0 12px;font-size:18px">${title}</h2>${inner}</div>
     <div style="background:#f2f5f9;padding:12px 22px;font-size:12px;color:#667">এই মেইলটা স্বয়ংক্রিয়ভাবে পাঠানো।</div>
   </div>`;
@@ -141,8 +179,9 @@ function wrap(title, inner) {
 
 /** নতুন অর্ডার: অ্যাডমিন + কাস্টমার (চেকআউটের ইমেইলে, ফুল বিল PDF-সহ) */
 async function notifyNewOrder(o) {
+  const brand = await getBrand();
   let pdf = null;
-  try { pdf = await buildInvoicePdf(o); } catch (e) { console.error('PDF তৈরি ব্যর্থ:', e.message); }
+  try { pdf = await buildInvoicePdf(o, brand); } catch (e) { console.error('PDF তৈরি ব্যর্থ:', e.message); }
   const attachments = pdf ? [{ filename: `invoice-${o.orderNo}.pdf`, content: pdf }] : undefined;
   if (o.customer.email) {
     sendMail({
@@ -172,8 +211,9 @@ async function notifyNewOrder(o) {
 
 /** পেমেন্ট কনফার্ম হলে — অ্যাডমিন + কাস্টমার (ইমেইল দিয়ে থাকলে) */
 async function notifyPaid(o) {
+  const brand = await getBrand();
   let pdf = null;
-  try { pdf = await buildInvoicePdf(o); } catch (e) { console.error('PDF তৈরি ব্যর্থ:', e.message); }
+  try { pdf = await buildInvoicePdf(o, brand); } catch (e) { console.error('PDF তৈরি ব্যর্থ:', e.message); }
   const attachments = pdf ? [{ filename: `invoice-${o.orderNo}.pdf`, content: pdf }] : undefined;
   const adminTo = process.env.MAIL_ADMIN_TO || process.env.SMTP_USER;
   sendMail({
@@ -202,10 +242,11 @@ async function notifyPaid(o) {
 
 /** রেজিস্ট্রেশন OTP — ব্যর্থ হলে throw করে, যেন user জানে মেইল যায়নি */
 async function sendOtpMail(email, name, code) {
+  await getBrand();
   const t = getTransporter();
   if (!t) throw new Error('ইমেইল সিস্টেম কনফিগার করা নেই — কিছুক্ষণ পরে চেষ্টা করুন বা আমাদের সাথে যোগাযোগ করুন');
   await t.sendMail({
-    from: `"${process.env.SITE_NAME || 'NetBazar'}" <${process.env.SMTP_USER}>`,
+    from: `"${_brandName}" <${process.env.SMTP_USER}>`,
     to: email,
     subject: `আপনার ভেরিফিকেশন কোড: ${code}`,
     html: wrap('ইমেইল ভেরিফিকেশন', `
@@ -218,15 +259,16 @@ async function sendOtpMail(email, name, code) {
 
 /** টেস্ট মেইল — কনফিগ ঠিক আছে কিনা admin থেকে যাচাই (এরর হলে আসল কারণ ফেরত দেয়) */
 async function sendTestMail() {
+  await getBrand();
   if (!process.env.SMTP_USER || !process.env.SMTP_APP_PASSWORD) {
     throw new Error('.env-এ SMTP_USER আর SMTP_APP_PASSWORD সেট করুন (Gmail App Password লাগবে, সাধারণ পাসওয়ার্ড না)');
   }
   const to = process.env.MAIL_ADMIN_TO || process.env.SMTP_USER;
   const t = getTransporter();
   await t.sendMail({
-    from: `"${process.env.SITE_NAME || 'NetBazar'}" <${process.env.SMTP_USER}>`,
+    from: `"${_brandName}" <${process.env.SMTP_USER}>`,
     to,
-    subject: '✅ NetBazar টেস্ট মেইল — কনফিগ ঠিক আছে',
+    subject: `✅ ${_brandName} টেস্ট মেইল — কনফিগ ঠিক আছে`,
     html: wrap('টেস্ট সফল!', '<p>এই মেইলটা পেয়েছেন মানে ইমেইল নোটিফিকেশন কাজ করছে। এখন থেকে প্রতিটা অর্ডারে মেইল পাবেন।</p>'),
   });
   return to;
@@ -234,8 +276,9 @@ async function sendTestMail() {
 
 /** অর্ডার স্ট্যাটাস বদলালে কাস্টমারকে (ইমেইল থাকলে) */
 const STATUS_BN = { confirmed: 'কনফার্মড ✅', processing: 'প্রসেসিং শুরু হয়েছে 📦', shipped: 'কুরিয়ারে দেওয়া হয়েছে 🚚', delivered: 'ডেলিভার্ড 🎉', cancelled: 'বাতিল হয়েছে ❌', returned: 'রিটার্ন প্রসেস হয়েছে ↩️' };
-function notifyStatusChange(o, status) {
+async function notifyStatusChange(o, status) {
   if (!o.customer.email || !STATUS_BN[status]) return;
+  await getBrand();
   sendMail({
     to: o.customer.email,
     subject: `অর্ডার ${o.orderNo}: ${STATUS_BN[status]}`,

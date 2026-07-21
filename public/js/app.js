@@ -160,7 +160,7 @@
             ${settings.address ? `<p style="font-size:.9rem;opacity:.85;margin-top:6px">${esc(settings.address)}</p>` : ''}
           </div>
         </div>
-        <div class="footer-bottom"><span>© ${new Date().getFullYear()} ${esc(name)}</span><span style="opacity:.55">client v19</span></div>
+        <div class="footer-bottom"><span>© ${new Date().getFullYear()} ${esc(name)}</span><span style="opacity:.55">client v20</span></div>
       </div>`;
 
     $('#nav-collections').insertAdjacentHTML('beforeend',
@@ -288,6 +288,34 @@
     </a>`;
   }
 
+  /* cache-first রেন্ডার: সাইট instant খোলে, টাটকা ডাটা এলে নিজে নিজেই আপডেট হয় — refresh লাগে না */
+  const swrCache = {
+    get(k) { try { return JSON.parse(localStorage.getItem('nb_c:' + k)); } catch { return null; } },
+    set(k, v) {
+      try { localStorage.setItem('nb_c:' + k, JSON.stringify(v)); }
+      catch {
+        try {
+          Object.keys(localStorage).filter((x) => x.startsWith('nb_c:')).forEach((x) => localStorage.removeItem(x));
+          localStorage.setItem('nb_c:' + k, JSON.stringify(v));
+        } catch {}
+      }
+    },
+  };
+  async function swr(key, fetcher, render) {
+    const cached = swrCache.get(key);
+    if (cached) { try { render(cached, true); } catch (e) { console.error('swr cached render:', e); } }
+    try {
+      const fresh = await fetcher();
+      const changed = JSON.stringify(fresh) !== JSON.stringify(cached);
+      swrCache.set(key, fresh);
+      if (!cached || changed) render(fresh, false); // state বদলালে অটো re-render
+      return fresh;
+    } catch (e) {
+      if (!cached) throw e; // cache থাকলে অফলাইনেও পেজ দেখা যায়
+      return cached;
+    }
+  }
+
   const skelCards = (n = 8) => Array.from({ length: n }, () =>
     '<div class="skel-card"><div class="skel si"></div><div class="skel sl"></div><div class="skel sl short"></div></div>').join('');
 
@@ -302,15 +330,20 @@
         const sec = legacy.closest('section');
         if (sec) sec.remove(); else legacy.remove();
       }
-      $('#home-featured').innerHTML = skelCards(8);
-      $('#home-latest').innerHTML = skelCards(8);
+      if (!swrCache.get('home:featured')) $('#home-featured').innerHTML = skelCards(8);
+      if (!swrCache.get('home:latest')) $('#home-latest').innerHTML = skelCards(8);
       try {
-        const feat = await api('/products?featured=1&limit=8');
-        $('#home-featured').innerHTML = feat.items.map(productCard).join('') || '<p class="empty-state">ফিচারড প্রোডাক্ট নেই</p>';
-        const latest = await api('/products?sort=newest&limit=8');
-        $('#home-latest').innerHTML = latest.items.map(productCard).join('');
+        await Promise.all([
+          swr('home:featured', () => api('/products?featured=1&limit=8'), (feat) => {
+            $('#home-featured').innerHTML = feat.items.map(productCard).join('') || '<p class="empty-state">ফিচারড প্রোডাক্ট নেই</p>';
+            observeReveals();
+          }),
+          swr('home:latest', () => api('/products?sort=newest&limit=8'), (latest) => {
+            $('#home-latest').innerHTML = latest.items.map(productCard).join('');
+            observeReveals();
+          }),
+        ]);
       } catch (e) { toast(e.message, true); }
-      observeReveals();
     },
 
     /* ----- collection / search ----- */
@@ -321,20 +354,22 @@
       const state = { page: 1, sort: params.get('sort') || 'newest' };
 
       const load = async () => {
-        $('#col-grid').innerHTML = skelCards(8);
         const qs = new URLSearchParams({ page: state.page, sort: state.sort, limit: 24 });
         if (slugMatch) qs.set('collection', decodeURIComponent(slugMatch[1]));
         if (q) qs.set('q', q);
-        try {
-          const data = await api('/products?' + qs);
+        const key = 'col:' + qs.toString();
+        if (!swrCache.get(key)) $('#col-grid').innerHTML = skelCards(8);
+        const renderCol = (data) => {
           $('#col-title').textContent = q ? `"${q}" এর ফলাফল (${data.total})` : ($('#col-title').dataset.name || 'সব প্রোডাক্ট');
           $('#col-grid').innerHTML = data.items.map(productCard).join('') ||
-            `<div class="empty-state" style="grid-column:1/-1"><span class="led"><i></i><i></i><i></i><i></i></span><p>কিছু পাওয়া যায়নি</p></div>`;
+            `<div class="empty-state" style="grid-column:1/-1"><p>কিছু পাওয়া যায়নি</p></div>`;
           $('#col-pager').innerHTML = data.pages > 1
             ? Array.from({ length: data.pages }, (_, i) => `<button class="btn ${i + 1 === state.page ? 'btn-primary' : 'btn-ghost'}" data-pg="${i + 1}">${i + 1}</button>`).join(' ')
             : '';
           observeReveals();
-        } catch (e) { toast(e.message, true); }
+        };
+        try { await swr(key, () => api('/products?' + qs), renderCol); }
+        catch (e) { toast(e.message, true); }
       };
       if (slugMatch) {
         try {
@@ -363,10 +398,9 @@
             <div class="skel skel-line" style="width:100%;height:46px;margin-top:22px;border-radius:12px"></div>
           </div>
         </div>`;
-      let data;
-      try { data = await api('/products/' + encodeURIComponent(slug)); }
-      catch (e) { $('#pd-root').innerHTML = `<div class="empty-state"><p>${esc(e.message)}</p></div>`; return; }
+      const renderProduct = (data) => {
       const p = data.product;
+      const hasDesc = !!(p.description && p.description.replace(/<[^>]*>/g, '').trim());
       const stars = (n) => Array.from({ length: 5 }, (_, i) => `<span class="${i < Math.round(n) ? '' : 'off'}">★</span>`).join('');
       let variant = p.variants.find((v) => v.stock > 0) || p.variants[0];
       let qty = 1;
@@ -408,25 +442,32 @@
         </div>
         <div class="section" id="pd-sections">
           <nav class="pd-tabs" id="pd-tabs" aria-label="প্রোডাক্ট সেকশন">
-            ${p.specs?.length ? '<button data-sec="sec-specs" class="active">স্পেসিফিকেশন</button>' : ''}
-            <button data-sec="sec-desc" ${p.specs?.length ? '' : 'class="active"'}>বিবরণ</button>
-            ${p.faqs?.length ? '<button data-sec="sec-faq">সচরাচর প্রশ্ন</button>' : ''}
+            ${p.specs?.length ? '<button data-sec="sec-specs">স্পেসিফিকেশন</button>' : ''}
+            ${hasDesc ? '<button data-sec="sec-desc">বিবরণ</button>' : ''}
+            ${p.aplusHtml ? '<button data-sec="sec-story">স্টোরি</button>' : ''}
+            <button data-sec="sec-faq">সচরাচর প্রশ্ন</button>
+            <button data-sec="reviews-section">রিভিউ</button>
           </nav>
           ${p.specs?.length ? `<section class="pd-section" id="sec-specs">
             <h3 class="pd-sec-title">স্পেসিফিকেশন</h3>
             <div class="spec-grid">${p.specs.map((sp) => `<div class="sk">${esc(sp.label)}</div><div class="sv">${esc(sp.value)}</div>`).join('')}</div>
           </section>` : ''}
-          <section class="pd-section" id="sec-desc">
+          ${hasDesc ? `<section class="pd-section" id="sec-desc">
             <h3 class="pd-sec-title">বিবরণ</h3>
-            <div class="pd-desc">${p.description || '<p>বিবরণ যোগ হয়নি।</p>'}</div>
-          </section>
-          ${p.faqs?.length ? `<section class="pd-section" id="sec-faq">
-            <h3 class="pd-sec-title">সচরাচর প্রশ্ন</h3>
-            ${p.faqs.map((f) => `<details class="faq-item"><summary>${esc(f.q)}</summary><p>${esc(f.a)}</p></details>`).join('')}
+            <div class="pd-desc">${p.description}</div>
           </section>` : ''}
+          ${p.aplusHtml ? `<section class="pd-section" id="sec-story">
+            <h3 class="pd-sec-title">প্রোডাক্ট স্টোরি</h3>
+            <div class="aplus">${p.aplusHtml}</div>
+          </section>` : ''}
+          <section class="pd-section" id="sec-faq">
+            <h3 class="pd-sec-title">সচরাচর প্রশ্ন</h3>
+            ${p.faqs?.length
+              ? p.faqs.map((f) => `<details class="faq-item"><summary>${esc(f.q)}</summary><p>${esc(f.a)}</p></details>`).join('')
+              : '<p class="empty-state" style="padding:14px 0">এখনো কোনো প্রশ্ন যোগ হয়নি — কিছু জানার থাকলে আমাদের সাথে যোগাযোগ করুন।</p>'}
+          </section>
         </div>
-        ${p.aplusHtml ? `<div class="section"><div class="section-head"><div><span class="eyebrow">প্রোডাক্ট স্টোরি</span><h2>বিস্তারিত জানুন</h2></div></div><div class="aplus">${p.aplusHtml}</div></div>` : ''}
-        <div class="section" id="reviews-section">
+        <div class="section pd-section" id="reviews-section">
           <div class="section-head"><div><span class="eyebrow">ভ্যারিফাইড কাস্টমার</span><h2>রিভিউ</h2></div></div>
           <div class="card">
             ${data.rating.count ? `<div class="rating-summary"><span class="big">${data.rating.avg}</span><div><span class="stars">${stars(data.rating.avg)}</span><br><small style="color:var(--ink-soft)">${data.rating.count}টা ভ্যারিফাইড রিভিউ</small></div></div>` : ''}
@@ -457,6 +498,11 @@
         <div class="sticky-atc" id="sticky-atc">
           <img src="${esc(imgs[0] || '/img-placeholder.svg')}" alt="">
           <div class="sa-info"><span class="sa-t">${esc(p.title)}</span><span class="sa-p" id="satc-price"></span></div>
+          <div class="sa-qty" aria-label="পরিমাণ">
+            <button type="button" id="satc-minus" aria-label="কমান">−</button>
+            <span id="satc-qty">1</span>
+            <button type="button" id="satc-plus" aria-label="বাড়ান">+</button>
+          </div>
           <button class="btn btn-primary" id="satc-add">কার্টে যোগ করুন</button>
         </div>`;
 
@@ -475,12 +521,17 @@
           `<button data-vid="${v._id}" ${v.stock <= 0 ? 'disabled' : ''}>${esc(v.name)}</button>`).join('');
         $('#pd-variants').addEventListener('click', (e) => {
           const b = e.target.closest('[data-vid]');
-          if (b) { variant = p.variants.find((v) => v._id === b.dataset.vid); qty = 1; $('#qty-input').value = 1; renderVariant(); }
+          if (b) { variant = p.variants.find((v) => v._id === b.dataset.vid); qty = 1; $('#qty-input').value = 1; const sq = $('#satc-qty'); if (sq) sq.textContent = 1; renderVariant(); }
         });
       }
       renderVariant();
 
-      const setQty = (n) => { qty = Math.min(Math.max(1, n), Math.max(variant.stock, 1)); $('#qty-input').value = qty; };
+      const setQty = (n) => {
+        qty = Math.min(Math.max(1, n), Math.max(variant.stock, 1));
+        $('#qty-input').value = qty;
+        const sq = $('#satc-qty');
+        if (sq) sq.textContent = qty;
+      };
       $('#qty-minus').addEventListener('click', () => setQty(qty - 1));
       $('#qty-plus').addEventListener('click', () => setQty(qty + 1));
       $('#qty-input').addEventListener('change', (e) => setQty(parseInt(e.target.value) || 1));
@@ -501,7 +552,13 @@
         document.documentElement.style.setProperty('--tabs-top', t + 'px');
       };
       setTabsTop();
-      window.addEventListener('resize', setTabsTop);
+      window.__setTabsTop = setTabsTop;
+      if (!window.__tabsTopBound) {
+        window.__tabsTopBound = true;
+        window.addEventListener('resize', () => window.__setTabsTop && window.__setTabsTop());
+      }
+      const firstBtn = tabsBar.querySelector('button');
+      if (firstBtn) firstBtn.classList.add('active');
       tabsBar.addEventListener('click', (e) => {
         const b = e.target.closest('[data-sec]');
         if (!b) return;
@@ -525,6 +582,8 @@
         }).observe($('#add-to-cart'));
       }
       $('#satc-add').addEventListener('click', () => Cart.add(cartItem()));
+      $('#satc-minus').addEventListener('click', () => setQty(qty - 1));
+      $('#satc-plus').addEventListener('click', () => setQty(qty + 1));
       if (imgs.length > 1) $('.pd-thumbs').addEventListener('click', (e) => {
         const b = e.target.closest('[data-i]');
         if (b) { $('#pd-img').src = imgs[+b.dataset.i]; $$('.pd-thumbs button').forEach((x) => x.classList.toggle('active', x === b)); }
@@ -561,6 +620,14 @@
         } catch (err) { toast(err.message, true); }
       });
       observeReveals();
+      }; // renderProduct শেষ
+
+      try {
+        // cache থাকলে instant দেখায়, fresh এলে বদল থাকলে অটো re-render
+        await swr('p:' + slug, () => api('/products/' + encodeURIComponent(slug)), (d) => renderProduct(d));
+      } catch (e) {
+        $('#pd-root').innerHTML = `<div class="empty-state"><p>${esc(e.message)}</p><a href="/" class="btn btn-primary" style="margin-top:12px">হোমে ফিরুন</a></div>`;
+      }
     },
 
     /* ----- cart ----- */
@@ -1074,7 +1141,7 @@
   };
 
   /* ---------- boot ---------- */
-  console.log('NetBazar client v19');
+  console.log('NetBazar client v20');
   document.addEventListener('DOMContentLoaded', async () => {
     // visit beacon — session-প্রতি একবার
     try {
